@@ -29,7 +29,6 @@ for i=4%1:length(output_specification_files)
    vars=fieldnames(output_file.variable_entry);
 
    ps_init=0;
-   interpolant=struct('latitude',[],'longitude',[],'lev',[]);
 
    %Output file for all variables
    for v=30%1:length(vars)
@@ -121,15 +120,15 @@ for i=4%1:length(output_specification_files)
       for j=1:length(var_out.dim) 
          if strcmp(var_out.dim{j}.interp,'interpolate')
             if strcmp(var_out.dim{j}.interp_special,'vertical')
-               [var_out,interpolant.lev]=interpolate_field(var_out.value,j,var_out.dim{j},a,b,ps,interpolant.lev);
+               var_out=interpolate_field(var_out.value,j,var_out.dim{j},a,b,ps);
             else
-               eval(['[var_out,interpolant.',dims{j},']=interpolate_field(var_out.value,j,var_out.dim{j},interpolant.',dims{j},');']);
+               var_out=interpolate_field(var_out.value,j,var_out.dim{j},a,b,ps);
             end
          end
       end
 
       %Gather global attributes
-   %globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output_file);   
+      globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output_file);   
 
       %Gather variable attributes
       %bnd variables
@@ -148,42 +147,37 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Sets up the interpolant
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function interpolant=initialize_interpolant(dim_in,dim_out)
-
-%Scan each grid point and determine nearest input points for given output
-
-
-end
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Interpolates along specified dimension
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [field_out,interpolant]=interpolate_field(field,j,dim,varargin)
+function field_out=interpolate_field(field,interp_dim,dim,varargin)
 
-a=[];
-b=[];
-ps=[];
-interpolant=[];
+%Optional: load in surface pressure, a/b's for vertical interp
 if nargin>3
    a=varargin{1};
    b=varargin{2};
    ps=varargin{3};
-end
-if nargin==7
-   interpolant=varargin{4};
+
+   ps=repmat(ps,[ones(length(size(ps)),1) length(a)]);
+   a=permute(repmat(a(:),[1 size(ps)]),[2:length(size(ps)) 1]);
+   b=permute(repmat(b(:),[1 size(ps)]),[2:length(size(ps)) 1]);
+
+   dim.native.value=1e5*a+ps.*b;
+   dim_reshape=1;
+else
+   dim_reshape=0;
 end
 
 dimsizes=size(field);
 dims=1:length(dimsizes);
 
-%Reshape field to have j on right, arbitrary 5D array
+%Reshape field to have j on right, arbitrary 4D array
 dims_reshaped=dims;
-dims_reshaped(j)=[];
-field=permute(field,[dims_reshaped j]);
-dimsizes=permute(dimsizes,[dims_reshaped j]);
+dims_reshaped(interp_dim)=[];
+field=permute(field,[dims_reshaped interp_dim]);
+if dim_reshape==1
+   dim.native.value=permute(dim.native.value,[dims_reshaped interp_dim]);
+end
+dimsizes=permute(dimsizes,[dims_reshaped interp_dim]);
 
 %Set up Interpolant
 dimsizes(end)=length(dim.out.info.requested);
@@ -192,16 +186,36 @@ field_out=zeros(dimsizes);
 %Expand to arbirary rank 
 field=expand_field(field);
 
-%Set up interpolant
-if isempty(interpolant)
-   if isempty(ps)
-      interpolant=initialize_interpolant(dim_in,dim_out);
-   else
-      interpolant=initialize_interpolant(dim_in,dim_out,a,b,ps);
+%Interpolate
+for i=1:size(field,1)
+   for j=1:size(field,2)
+      parfor k=1:size(field,3)
+         if dim_reshape==1
+            field_out(i,j,k,:)=interp1(squeeze(dim.native.value(i,j,k,:)),...
+                                  squeeze(field(i,j,k,:)),dim.out.info.requested);
+         else
+            field_out(i,j,k,:)=interp1(dim.native.value,...
+                                  squeeze(field(i,j,k,:)),dim.out.info.requested);
+         end
+      end
    end
 end
 
+%Collapse singular dimensions
+field_out=squeeze(field_out);
+
 %Reshape field back to original order
+j_index=length(size(field_out));
+if j==1
+   dims_reshaped=[j_index 1:j_index-1];
+elseif j==j_index
+   dims_reshaped=[1:j_index];
+else
+   dims_reshaped=[1:interp_dim-1 j_index interp_dim:j_index-1];
+end
+
+%Squeeze to collapse singular dimensions
+field_out=squeeze(permute(field_out,dims_reshaped)); 
 
 end
 
@@ -355,5 +369,3 @@ for i=1:length(specs)
 end
 
 end
-
-
