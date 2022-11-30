@@ -1,0 +1,31 @@
+{
+   "Conventions" : "CF-1.7",
+   "activity_id" : "CCMI2022",
+   "contact" : "nadavis@ucar.edu",
+   "creation_date" : {
+      "eval" : "date"
+   },
+   "experiment" : "Hindcast",
+   "experiment_id" : {
+      "eval" : "cmor_specification.cmor_experiment"
+   },
+   "frequency" : {
+      "eval" : "frequency"
+   },
+   "grid" : "gn",
+   "grid_label" : "gn",
+   "institution" : "NCAR",
+   "institution_id" : "National Center for Atmospheric Research, Climate and Global Dynamics Laboratory, 1850 Table Mesa Drive, Boulder, CO 80305, USA",
+   "nominal_resolution" : "100 km",
+   "realm" : "atmos",
+   "source" : {
+      "eval" : "specification.CV.CV.source_id.CESM2_WACCM.source"
+   },
+   "source_id" : "CESM2_WACCM",
+   "source_type" : "AGCM-CHEM",
+   "sub_experiment" : "none",
+   "table_id" : "Amon",
+   "variable_id" : {
+      "eval" : "vars{v}"
+   } 
+}
