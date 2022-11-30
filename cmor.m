@@ -17,6 +17,10 @@ output_specification_files=remove_entries(output_specification_files,specificati
 %Includes information for translating MIP requests for frequency, realm, etc.
 cesm_dictionary=json_load(cmor_specification.cmor_variable_dictionary);
 
+cesm_globals=json_load(['cesm_global_attributes_Amon.json']);
+   cesm_globals_names=fieldnames(cesm_globals);
+
+
 %Create output files
 for i=4%1:length(output_specification_files)
 
@@ -115,7 +119,8 @@ for i=4%1:length(output_specification_files)
       end
 
       %Special operations - omega to wa, age of air, integrate, max value
-         
+      %Todo        
+ 
       %Do any interpolation
       for j=1:length(var_out.dim) 
          if strcmp(var_out.dim{j}.interp,'interpolate')
@@ -127,8 +132,8 @@ for i=4%1:length(output_specification_files)
          end
       end
 
-      %Gather global attributes
-      globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output_file);   
+      %Gather required global attributes
+      globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output);   
 
       %Gather variable attributes
       %bnd variables
@@ -145,6 +150,13 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %FUNCTIONS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Create bounding variables
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function bnds=create_bnds(dim)
+
+end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Interpolates along specified dimension
@@ -206,16 +218,14 @@ field_out=squeeze(field_out);
 
 %Reshape field back to original order
 j_index=length(size(field_out));
-if j==1
+if interp_dim==1
    dims_reshaped=[j_index 1:j_index-1];
-elseif j==j_index
+elseif interp_dim==j_index
    dims_reshaped=[1:j_index];
 else
    dims_reshaped=[1:interp_dim-1 j_index interp_dim:j_index-1];
 end
-
-%Squeeze to collapse singular dimensions
-field_out=squeeze(permute(field_out,dims_reshaped)); 
+field_out=permute(field_out,dims_reshaped); 
 
 end
 
@@ -316,12 +326,35 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Gather required global attributes
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function globals=global_attributes(required_attributes,CV_file,output_file)
+function globals=global_attributes(required_attributes,CV_file,output)
    
 globals=struct;
+cesm_globals=json_load(['cesm_global_attributes_',output,'.json']);
+cesm_globals_names=fieldnames(cesm_globals);
+mip_globals=fieldnames(CV_file);
+
 for i=1:length(required_attributes)
    globals(i).name=required_attributes{i};
-   for j=1:length(CV_file)
+   overwrite=0;
+
+   %Pull values from cesm spec file
+   for j=1:length(cesm_globals)
+      if strcmp(globals(i).name,cesm_globals_name{i})
+         input=eval(['cesm_globals.',cesm_globals_name{i}]);
+         if isstruct(input)
+            input=eval([input.eval]);
+         end
+         overwrite=1;
+      end
+   end
+
+   %Otherwise pull from mip file
+   if overwrite==0
+      for j=1:length(mip_globals)
+         if strcmp(globals(i).name,mip_globals{j})
+            input=eval(['CV_file.',mip_globals{i},'{1}']);
+         end
+      end 
    end
 end
 
