@@ -1,0 +1,10 @@
+{
+    "case_name": "f.e21.FWHIST.f09_f09_mg17.cesm2.1.4.REFD1.001",
+    "case_output_dir": "/glade/scratch/nadavis/CCMI/CCMI-2022/ACOM/",
+    "cmor_output_dir": "/glade/scratch/nadavis/CCMI/CCMI-2022/REFD1/",
+    "cmor_specification_format": "CCMI2022_",
+    "cmor_specification_dir": "/glade/scratch/nadavis/CCMI/CCMI-2022/Tables/",
+    "cmor_variable_dictionary" : "cesm_variable_dictionary.json",
+    "cmor_case_name" : "r1i1p1f1",
+    "cmor_experiment" : "refD1"
+}

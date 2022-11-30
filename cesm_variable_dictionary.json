@@ -1,0 +1,97 @@
+{
+  "Variables" : {
+    "c2h2" : "C2H2",
+    "c2h6" : "C2H6",
+    "ch4" : "CH4",
+    "clc" : "CONCLD",
+    "cl" : "CLOUD",
+    "cltc" : {
+       "var1" : "CONCLD",
+       "operation" : "max_value",
+       "axis" : "lev"
+       },
+    "clt" : "CLDTOT",
+    "co" : "CO",
+    "co2" : "CO2",  
+    "cod" : {
+       "var1": "TOT_CLD_VISTAU",
+       "operation" : "integrate",
+       "axis" : "lev"
+       }, 
+    "h2o" : {
+       "var1" : "Q",
+       "var2" : "CLDICE",
+       "var3" : "CLDLIQ",
+       "eval" : "(var{1}.native.value+var{2}.native.value+var{3}.native.value)*(18./28.97e-3)"
+       },
+    "hcl" : "HCL",
+    "hcn" : "HCN",
+    "hfls" : "LHFLX",
+    "hfss" : "SHFLX",
+    "meanage" : {
+        "var1" : "AOA1",
+        "operation" : "age_of_air",
+        "lat0" : "0.5",
+        "p0" : "100"
+        },
+    "mcu" : "ZMMU",
+    "no" : "NO",
+    "no2" : "NO2",       
+    "pr" : {
+        "var1" : "PRECT",
+        "eval" : "1000*var{1}.native.value",
+        "change_units" : "kg m-2 s-1"
+        },
+    "ps" : "PS",
+    "ptp" : "TROP_P",
+    "o3" : "O3",
+    "o3strat" : "O3S",
+    "o3stratdep" : "DF_O3S",
+    "o3stratloss" : "O3S_Loss",
+    "oh" : "OH",
+    "rlut" : "FLUT",
+    "rsut" : {
+        "var1" : "SOLIN",
+        "var2" : "FSNTOA",
+        "eval" : "var{1}.native.value-var{2}.native.value"
+        },
+    "siconca" : "ICEFRAC",
+    "tatp" : "TROP_T",
+    "toz" : {
+        "var1" : "TMO3",
+        "eval" : "var{1}.native.value*2.1315e-5"
+        },
+    "tropoz" : "TOZ",
+    "ta" : "T",
+    "tntrl" : "QRL",
+    "tntrs" : "QRS",
+    "ts" : "TS",
+    "ua" : "U",
+    "va" : "V",
+    "wa" : {
+        "var1" : "OMEGA",
+        "var2" : "T",
+        "operation" : "omega_to_w"
+        },
+    "zg" : "Z3",
+    "ztp" : "TROP_Z"
+  },
+ 
+  "Realms" : {
+    "atmos" : "atm"
+  },
+
+  "Frequency" : {
+    "mon" : "month"
+  },
+
+  "Dimension" : {
+    "latitude" : "lat",
+    "longitude" : "lon",
+    "time" : "time",
+    "alevel" : "lev", 
+    "plev39" : "lev"
+  }
+
+
+}
