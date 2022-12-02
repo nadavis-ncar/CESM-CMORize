@@ -26,6 +26,6 @@
    "sub_experiment" : "none",
    "table_id" : "Amon",
    "variable_id" : {
-      "eval" : "vars{v}"
+      "eval" : "var"
    } 
 }
