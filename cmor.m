@@ -1,5 +1,6 @@
 %Script to CMORize CESM output
 %Currently only functioning for the atmosphere component
+%Assumes lat/lon grid, single variable timeseries (convert SE/MPAS to gridded output first)
 %nadavis@ucar.edu
 
 %Load user-supplied specification details 
@@ -18,10 +19,9 @@ output_specification_files=remove_entries(output_specification_files,specificati
 cesm_dictionary=json_load(cmor_specification.cmor_variable_dictionary);
 
 cesm_globals=json_load(['cesm_global_attributes_Amon.json']);
-   cesm_globals_names=fieldnames(cesm_globals);
+cesm_globals_names=fieldnames(cesm_globals);
 
-
-%Create output files
+%Load/transform data, collect metadata, create output files, for each output spec
 for i=4%1:length(output_specification_files)
 
    output_specification_file=[output_specification_files(i).folder,'/',output_specification_files(i).name];
@@ -31,15 +31,16 @@ for i=4%1:length(output_specification_files)
    output=strrep(output,'.json','');
 
    vars=fieldnames(output_file.variable_entry);
-
+   vars_info=struct2cell(output_file.variable_entry); 
+  
    ps_init=0;
 
-   %Output file for all variables
+   %Output file for each variable
    for v=30%1:length(vars)
 
-      %eval converts a string to dynamic code
-      %most straightforward way to deal with a decoded json
-      local_var_spec=eval(['output_file.variable_entry.',vars{v}]);
+      local_var_spec=vars_info{v};
+ 
+      local_var_spec.averaging=averaging_flags(local_var_spec.cell_methods);
 
       %Create directory
       dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v}];
@@ -57,7 +58,7 @@ for i=4%1:length(output_specification_files)
       %Model output location
       dir_input=[dir_input_main,realm,'/proc/tseries/',frequency,'_1/',cmor_specification.case_name]; 
 
-      %Perform special operations, scale_factors, or just load the variable 
+      %Gather variable info, special operations, scale_factors; or just load the variable 
       if length(fieldnames(variables_list))>1
          [variable]=translate_cesm_variable(variables_list);
       else
@@ -71,7 +72,7 @@ for i=4%1:length(output_specification_files)
          var_files=dir([dir_input,'*.',variable.var{vin},'.*']);
          file_name=[var_files(1).folder,'/',var_files(1).name];
 
-         dims=eval(['parse_string(output_file.variable_entry.',vars{v},'.dimensions);']);
+         dims=parse_string(local_var_spec.dimensions);
          for j=1:length(dims)
             dim{vin}{j}.native.name=translate_cesm(cesm_dictionary,dims{j},'Dimension');    
             dim{vin}{j}.native.value=ncread(file_name,dim{vin}{j}.native.name);
@@ -112,14 +113,15 @@ for i=4%1:length(output_specification_files)
       var_out.dim=dim{1};
 
       %Perform arithmetic operation
+      %Eval converts a string to code and executes
       if ~isempty(variable.eval) 
          eval(['var_out.native.value=',variable.eval{1},';'])
       else
-         var_out=var{1};
+         var_out.native=var{1}.native;
       end
 
       %Special operations - omega to wa, age of air, integrate, max value
-      %Todo        
+      %%%Todo        
  
       %Do any interpolation
       for j=1:length(var_out.dim) 
@@ -127,10 +129,19 @@ for i=4%1:length(output_specification_files)
             if strcmp(var_out.dim{j}.interp_special,'vertical')
                var_out=interpolate_field(var_out.value,j,var_out.dim{j},a,b,ps);
             else
-               var_out=interpolate_field(var_out.value,j,var_out.dim{j},a,b,ps);
+               var_out=interpolate_field(var_out.value,j,var_out.dim{j});
             end
          end
       end
+
+      %Averaging, preserves singular dimensions
+      for j=1:length(dims)
+         for k=1:length(local_var_spec.averaging)
+            if strcmp(local_var_spec.averaging{k},dims{j}) && ~strcmp(local_var_spec.averaging{k},'time')
+               var_out.native.value=mean(var_out.native.value,j);
+            end
+         end
+      end 
 
       %Gather required global attributes
       globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output);   
@@ -152,6 +163,40 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Determine which dims need to be averaged
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function averaging=averaging_flags(cell_methods)
+
+parsed=parse_string(cell_methods);
+index=1;
+ave_count=1;
+
+while ~isempty(parsed)
+   %Dimension
+   if contains(parsed{index},':')
+      if length(parsed)>index
+         %Do no averaging, remove entry 
+         if contains(parsed{index+1},':')
+            parsed(index)=[];
+         else
+            %Add averaging flag, remove entry pair
+            averaging{ave_count}=strrep(parsed{index},':','');
+            ave_count=ave_count+1;
+            parsed(index:index+1)=[];
+         end
+      else
+         %Remove entry
+         parsed(index)=[];
+      end
+   else
+      %Move along (probably unnecessary?)
+      index=index+1;
+   end
+end
+      
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Create bounding variables
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function bnds=create_bnds(dim)
@@ -163,7 +208,7 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function field_out=interpolate_field(field,interp_dim,dim,varargin)
 
-%Optional: load in surface pressure, a/b's for vertical interp
+%Optional: load in surface pressure, a/b's for vertical interp, generate pressure array
 if nargin>3
    a=varargin{1};
    b=varargin{2};
@@ -186,16 +231,19 @@ dims=1:length(dimsizes);
 dims_reshaped=dims;
 dims_reshaped(interp_dim)=[];
 field=permute(field,[dims_reshaped interp_dim]);
+rank_permute=length(size(field));
+
+%We need to reshape so the pressure array matches
 if dim_reshape==1
    dim.native.value=permute(dim.native.value,[dims_reshaped interp_dim]);
 end
 dimsizes=permute(dimsizes,[dims_reshaped interp_dim]);
 
-%Set up Interpolant
+%Set up interpolant
 dimsizes(end)=length(dim.out.info.requested);
 field_out=zeros(dimsizes);
 
-%Expand to arbirary rank 
+%Expand to arbirary rank with interp on right
 field=expand_field(field);
 
 %Interpolate
@@ -213,8 +261,8 @@ for i=1:size(field,1)
    end
 end
 
-%Collapse singular dimensions
-field_out=squeeze(field_out);
+%Collapse any extra singular dimensions, ensure any preexisting singular remains
+field_out=collapse_field(field_out);
 
 %Reshape field back to original order
 j_index=length(size(field_out));
@@ -230,7 +278,39 @@ field_out=permute(field_out,dims_reshaped);
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Expand a field to an arbitrary matrix rank of 5
+%Collapse a field to a specified matrix rank
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function field=collapse_field(field,rank)
+
+dimsizes=length(size(field));
+
+if length(field)>rank
+
+   padding=rank;
+   operator='(';
+   for i=1:padding-1
+      operator=cat(1,operator,':,');
+   end
+   operator=cat(operator,':)');
+   
+   singulars=length(dimsizes)-rank; 
+   singular_operator='(';
+   for i=1:singulars
+      singular_operator=cat(1,singular_operator,'1,');
+   end
+   for i=1:4-singulars+1
+     singular_operator=cat(1,singular_operator,':,');
+   end
+   singular_operator=cat(1,singular_operator,':)');
+
+   eval(['field',operator,'=field',singular_operator,';']);
+end
+
+end
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Expand a field to an arbitrary matrix rank of 4
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function field=expand_field(field)
 
@@ -330,7 +410,7 @@ function globals=global_attributes(required_attributes,CV_file,output)
    
 globals=struct;
 cesm_globals=json_load(['cesm_global_attributes_',output,'.json']);
-cesm_globals_names=fieldnames(cesm_globals);
+cesm_globals_name=fieldnames(cesm_globals);
 mip_globals=fieldnames(CV_file);
 
 for i=1:length(required_attributes)
