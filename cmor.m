@@ -67,6 +67,9 @@ for i=4%1:length(output_specification_files)
          
       load_ps=0;
 
+      %Grab global variables for the file
+      globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output,cmor_specification,specification,frequency,vars{v});
+
       %Load variable(s) 
       for vin=1:length(variable.var)
          var_files=dir([dir_input,'*.',variable.var{vin},'.*']);
@@ -95,6 +98,9 @@ for i=4%1:length(output_specification_files)
                load_ps=1;
                a=ncread(file_name,'hyam');
                b=ncread(file_name,'hybm');
+               ai=ncread(file_name,'hyai');
+               bi=ncread(file_name,'hybi');
+               ilev=ncread(file_name,'ilev');
                dim{vin}{j}.interp='';
             end
          end
@@ -131,6 +137,9 @@ for i=4%1:length(output_specification_files)
             else
                var_out=interpolate_field(var_out.value,j,var_out.dim{j});
             end
+            var_out.dim{j}.out.value=dim{vin}{j}.interp;
+         else
+            var_out.dim{j}.out.value=ncread(file_name,var_out.dim{j}.native.name);
          end
       end
 
@@ -143,11 +152,22 @@ for i=4%1:length(output_specification_files)
          end
       end 
 
-      %Gather required global attributes
-      globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output);   
-
-      %Gather variable attributes
-      %bnd variables
+      do_ab=0;
+      %Bnd variables
+      for j=1:length(var_out.dim)
+         if strcmp(var_out.dim{j}.out.name,'lev')
+            var_out.dim{j}.out.bnds = create_bnds(var_out.dim{j}.out,ilev);
+            do_ab=j;
+         else
+            var_out.dim{j}.out.bnds = create_bnds(var_out.dim{j}.out);
+         end
+      end
+      if do_ab~=0
+         var_out.dim{do_ab}.out.a_bnds = create_bnds(a,ai);
+         var_out.dim{do_ab}.out.b_bnds = create_bnds(b,bi);
+         var_out.dim{do_ab}.out.a=a;
+         var_out.dim{do_ab}.out.b=b;
+      end
 
       %Save to file
            
@@ -160,6 +180,10 @@ end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %FUNCTIONS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Create NetCDF output file
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -199,10 +223,46 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Create bounding variables
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function bnds=create_bnds(dim)
+function bnds=create_bnds(dim_in,varargin)
 
+bnds=zeros(2,length(dim));
+dim=dim_in.value;
+
+%Passed interface field (lev, a, b, etc.)
+if nargin>1
+   dim_interface=varargin{1};
+   for i=1:size(bnds,2)
+      bnds(1,i)=dim_interface(i);
+      bnds(2,i)=dim_interface(i+1);
+   end
+else
+   %Valid dim bounds exist (lat, lon)
+   if ~isempty(dim_in.info.valid_max)
+      maxbnd=str2num(dim_in.info.valid_max);
+      minbnd=str2num(dim_in.info.valid_min);
+      if dim(1)==minbnd
+         for j=1:size(bnds,2)-1
+            bnds(1,j)=dim(j);
+            bnds(2,j)=dim(j+1);
+         end
+         bnds(1,j+1)=dim(j+1);
+         bnds(2,j+1)=maxbnd;
+      else
+         bnds(1,1)=minbnd;
+         bnds(2,end)=maxbnd;
+         bnds(2,1)=minbnd+(dim(2)-dim(1))/2;
+         bnds(1,end)=bnds(2,end)-(dim(end)-dim(end-1))/2;        
+         for j=2:size(bnds,2)-1
+            bnds(1,j)=bnds(1,j-1)+(dim(j)-dim(j-1))/2;
+            bnds(2,j)=bnds(2,j-1)+(dim(j+1)-dim(j))/2;
+         end
+      end
+   else
+      error('Unable to construct bnds variable - no valid min/max in mip spec and no interface field')
+   end
 end
 
+end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Interpolates along specified dimension
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -406,12 +466,14 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Gather required global attributes
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function globals=global_attributes(required_attributes,CV_file,output)
+function globals=global_attributes(required_attributes,CV_file,output,cmor_specification,specification,frequency,var)
    
 globals=struct;
 cesm_globals=json_load(['cesm_global_attributes_',output,'.json']);
 cesm_globals_name=fieldnames(cesm_globals);
-mip_globals=fieldnames(CV_file);
+cesm_globals=struct2cell(cesm_globals);
+mip_globals_name=fieldnames(CV_file);
+mip_globals=struct2cell(CV_file);
 
 for i=1:length(required_attributes)
    globals(i).name=required_attributes{i};
@@ -419,8 +481,8 @@ for i=1:length(required_attributes)
 
    %Pull values from cesm spec file
    for j=1:length(cesm_globals)
-      if strcmp(globals(i).name,cesm_globals_name{i})
-         input=eval(['cesm_globals.',cesm_globals_name{i}]);
+      if strcmp(globals(i).name,cesm_globals_name{j})
+         input=cesm_globals{j};
          if isstruct(input)
             input=eval([input.eval]);
          end
@@ -431,11 +493,19 @@ for i=1:length(required_attributes)
    %Otherwise pull from mip file
    if overwrite==0
       for j=1:length(mip_globals)
-         if strcmp(globals(i).name,mip_globals{j})
-            input=eval(['CV_file.',mip_globals{i},'{1}']);
+         if strcmp(globals(i).name,mip_globals_name{j})
+            input=mip_globals{j};
+            if iscell(input)
+               input=input{1};
+            end
+            if isstruct(input)
+               input=struct2cell(input);
+               input=input{1};
+            end
          end
       end 
    end
+   globals(i).value=input;
 end
 
 end
