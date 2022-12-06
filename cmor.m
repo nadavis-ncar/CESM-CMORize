@@ -82,23 +82,25 @@ for i=4%1:length(output_specification_files)
             dim{vin}{j}.out.name=dims{j};
             dim{vin}{j}.out.info=dimension_info(specification,dims{j},cesm_dictionary);
             dim{vin}{j}.interp_special='';
-
+            
             %is there a requested grid for this dimension?
             if isstruct(dim{vin}{j}.out.info)
                dim{vin}{j}.interp=dim{vin}{j}.out.info.requested;
+            elseif strcmp(dim{vin}{j}.out.info,'lev')
+               dim{vin}{j}.out.info=struct('axis','Z','positive','down','long_name','hybrid sigma pressure coordinate','standard_name','atmosphere_hybrid_sigma_pressure_coordinate','formula','p = ap + b*ps','formula_terms','ap: ap b: b ps: ps','valid_max','','valid_min','');
             end
  
             %do we need to interpolate the vertical grid?
             if strcmp(dim{vin}{j}.native.name,'lev')
                if strcmp(dim{vin}{j}.out.name,'alevel')
-                  dim{vin}{j}.out.name='standard_hybrid_sigma';
+                  dim{vin}{j}.out.name='lev';
                   dim{vin}{j}.interp='';
                end
                dim{vin}{j}.interp_special='vertical';
                load_ps=1;
-               a=ncread(file_name,'hyam');
+               a=ncread(file_name,'hyam')*1e5;
                b=ncread(file_name,'hybm');
-               ai=ncread(file_name,'hyai');
+               ai=ncread(file_name,'hyai')*1e5;
                bi=ncread(file_name,'hybi');
                ilev=ncread(file_name,'ilev');
                dim{vin}{j}.interp='';
@@ -158,6 +160,8 @@ for i=4%1:length(output_specification_files)
          if strcmp(var_out.dim{j}.out.name,'lev')
             var_out.dim{j}.out.bnds = create_bnds(var_out.dim{j}.out,ilev);
             do_ab=j;
+         elseif strcmp(var_out.dim{j}.out.name,'time')
+            var_out.dim{j}.out.bnds=ncread(file_name,'time_bnds');
          else
             var_out.dim{j}.out.bnds = create_bnds(var_out.dim{j}.out);
          end
@@ -225,8 +229,12 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function bnds=create_bnds(dim_in,varargin)
 
+if isstruct(dim_in)
+   dim=dim_in.value;
+else
+   dim=dim_in;
+end
 bnds=zeros(2,length(dim));
-dim=dim_in.value;
 
 %Passed interface field (lev, a, b, etc.)
 if nargin>1
@@ -240,21 +248,32 @@ else
    if ~isempty(dim_in.info.valid_max)
       maxbnd=str2num(dim_in.info.valid_max);
       minbnd=str2num(dim_in.info.valid_min);
-      if dim(1)==minbnd
-         for j=1:size(bnds,2)-1
+
+      if xor(dim(1)==minbnd,dim(end)==maxbnd)
+         if dim(1)==minbnd
+            loop_start=1;
+            loop_end=size(bnds,2)-1;
+            bnds(1,size(bnds,2))=dim(end);
+            bnds(2,size(bnds,2))=maxbnd;
+         else
+            loop_start=2;
+            loop_end=size(bnds,2);
+            bnds(1,1)=minbnd;
+            bnds(2,1)=dim(1);
+         end
+         for j=loop_start:loop_end
             bnds(1,j)=dim(j);
             bnds(2,j)=dim(j+1);
          end
-         bnds(1,j+1)=dim(j+1);
-         bnds(2,j+1)=maxbnd;
-      else
+      else 
          bnds(1,1)=minbnd;
          bnds(2,end)=maxbnd;
-         bnds(2,1)=minbnd+(dim(2)-dim(1))/2;
-         bnds(1,end)=bnds(2,end)-(dim(end)-dim(end-1))/2;        
+
+         bnds(2,1)=bnds(1,1)+(dim(2)-dim(1))/2;
+         bnds(1,end)=bnds(2,end)-(dim(end)-dim(end-1))/2;
          for j=2:size(bnds,2)-1
-            bnds(1,j)=bnds(1,j-1)+(dim(j)-dim(j-1))/2;
-            bnds(2,j)=bnds(2,j-1)+(dim(j+1)-dim(j))/2;
+            bnds(1,j)=dim(j)-(dim(j)-dim(j-1))/2;
+            bnds(2,j)=dim(j)+(dim(j+1)-dim(j))/2;
          end
       end
    else
