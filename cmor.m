@@ -32,9 +32,8 @@ for i=4%1:length(output_specification_files)
 
    vars=fieldnames(output_file.variable_entry);
    vars_info=struct2cell(output_file.variable_entry); 
-  
-   ps_init=0;
 
+   output_var_details=struct2cell(output_file.variable_entry);  
    %Output file for each variable
    for v=30%1:length(vars)
 
@@ -75,6 +74,8 @@ for i=4%1:length(output_specification_files)
          var_files=dir([dir_input,'*.',variable.var{vin},'.*']);
          file_name=[var_files(1).folder,'/',var_files(1).name];
 
+         date=ncread(file_name,'date');
+         time=ncread(file_name,'time');
          dims=parse_string(local_var_spec.dimensions);
          for j=1:length(dims)
             dim{vin}{j}.native.name=translate_cesm(cesm_dictionary,dims{j},'Dimension');    
@@ -110,7 +111,7 @@ for i=4%1:length(output_specification_files)
          var{vin}.native.name=variable.var{vin};
 
          %Only load once for this output format
-         if load_ps & ~ps_init
+         if load_ps==1
             var_files=dir([dir_input,'*.PS.*']);
             file_name=[var_files(1).folder,'/',var_files(1).name];
             ps=ncread(file_name,'PS');
@@ -119,6 +120,7 @@ for i=4%1:length(output_specification_files)
 
       %Inherit dimensions of input var
       var_out.dim=dim{1};
+      ps_out=ps;
 
       %Perform arithmetic operation
       %Eval converts a string to code and executes
@@ -131,6 +133,7 @@ for i=4%1:length(output_specification_files)
       %Special operations - omega to wa, age of air, integrate, max value
       %%%Todo        
  
+      grid_label='gn';
       %Do any interpolation
       for j=1:length(var_out.dim) 
          if strcmp(var_out.dim{j}.interp,'interpolate')
@@ -138,6 +141,10 @@ for i=4%1:length(output_specification_files)
                var_out=interpolate_field(var_out.value,j,var_out.dim{j},a,b,ps);
             else
                var_out=interpolate_field(var_out.value,j,var_out.dim{j});
+               grid_label='gr';
+               if load_ps==1
+                  ps_out=interpolate_field(ps_out,j,var_out.dim{j});
+               end
             end
             var_out.dim{j}.out.value=dim{vin}{j}.interp;
          else
@@ -150,6 +157,8 @@ for i=4%1:length(output_specification_files)
          for k=1:length(local_var_spec.averaging)
             if strcmp(local_var_spec.averaging{k},dims{j}) && ~strcmp(local_var_spec.averaging{k},'time')
                var_out.native.value=mean(var_out.native.value,j);
+               ps_out=mean(ps_out,j);
+               grid_label=cat(1,grid_label,'z');
             end
          end
       end 
@@ -172,9 +181,22 @@ for i=4%1:length(output_specification_files)
          var_out.dim{do_ab}.out.a=a;
          var_out.dim{do_ab}.out.b=b;
       end
+      var_out.info=output_var_details{v};
 
       %Save to file
-           
+      for j=1:length(globals)
+         if strcmp(globals(j).name,'source_id')
+            id_index=j;
+         end
+      end
+      outfile=[vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
+              '_',cmor_specification.cmor_case_name,'_',grid_label,'_',cmor_specification.case_dates,'.nc'];
+
+      if load_ps==1
+         dump=create_netcdf(var_out,outfile,ps_out);
+      else
+         dump=create_netcdf(var_out,outfile);
+      end 
    end
 end
 
@@ -189,6 +211,50 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Create NetCDF output file
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function netcdf_dump=create_netcdf(var_out,filename,varargin)
+
+do_ps=0;
+if nargin>2
+   ps=varargin{1};
+   ps_dim=[];
+   do_ps=1;
+end
+
+if exist(filename,'file')==2
+   delete(filename);
+   disp('Overwriting existing file')
+end
+ncid=netcdf.create(filename,'NETCDF4');
+
+for i=1:length(var_out.dim)
+   ndim(i)=length(var_out.dim{i}.out.value);
+   if strcmp(var_out.dim{i}.out.name,'time')
+      dim(i)=netcdf.defDim(ncid,var_out.dim{i}.out.name,netcdf.getConstant('NC_UNLIMITED'));
+   else
+      dim(i)=netcdf.defDim(ncid,var_out.dim{i}.out.name,ndim(i));
+   end
+   if do_ps==1
+      if ~strcmp(var_out.dim{i}.out.name,'lev')
+         ps_dim=cat(1,ps_dim,dim(i));
+      end
+   end
+end
+dim(i+1)=netcdf.defDim(ncid,'bnds',2);
+
+var=netcdf.defVar(ncid,var_out.info.out_name,'NC_FLOAT',dim);
+if do_ps==1
+   var_ps=netcdf.defVar(ncid,'ps','NC_FLOAT',ps_dim);
+end
+
+netcdf.endDef(ncid);
+
+netcdf.putVar(ncid,var,0,size(var_out.native.value,length(size(var_out.native.value)))-1,var_out.native.value);
+if do_ps==1
+   netcdf.putVar(ncid,var_ps,ps);
+end
+
+netcdf.close(ncid);
+end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Determine which dims need to be averaged
@@ -297,7 +363,7 @@ if nargin>3
    a=permute(repmat(a(:),[1 size(ps)]),[2:length(size(ps)) 1]);
    b=permute(repmat(b(:),[1 size(ps)]),[2:length(size(ps)) 1]);
 
-   dim.native.value=1e5*a+ps.*b;
+   dim.native.value=a+ps.*b;
    dim_reshape=1;
 else
    dim_reshape=0;
