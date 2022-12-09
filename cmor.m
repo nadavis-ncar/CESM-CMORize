@@ -35,17 +35,11 @@ for i=4%1:length(output_specification_files)
 
    output_var_details=struct2cell(output_file.variable_entry);  
    %Output file for each variable
-   for v=30%1:length(vars)
+   for v=21%1:length(vars)
 
       local_var_spec=vars_info{v};
  
       local_var_spec.averaging=averaging_flags(local_var_spec.cell_methods);
-
-      %Create directory
-      dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v}];
-      if ~exist(dir_output)
-         mkdir(dir_output)
-      end
 
       dir_input_main=[cmor_specification.case_output_dir,cmor_specification.case_name,'/'];
 
@@ -58,20 +52,22 @@ for i=4%1:length(output_specification_files)
       dir_input=[dir_input_main,realm,'/proc/tseries/',frequency,'_1/',cmor_specification.case_name]; 
 
       %Gather variable info, special operations, scale_factors; or just load the variable 
-      if length(fieldnames(variables_list))>1
-         [variable]=translate_cesm_variable(variables_list);
+      if length(variables_list)==1
+         variables{1}=variables_list;
       else
-         variable{1}=variables_list;
+         [variable]=translate_cesm_variable(variables_list);
+         variables=variable.in;
       end
          
       load_ps=0;
 
       %Grab global variables for the file
       globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output,cmor_specification,specification,frequency,vars{v});
-
+      globals=set_index_variables(globals,cmor_specification.cmor_case_name);
+    
       %Load variable(s) 
-      for vin=1:length(variable.var)
-         var_files=dir([dir_input,'*.',variable.var{vin},'.*']);
+      for vin=1:length(variables)
+         var_files=dir([dir_input,'*.',variables{vin},'.*']);
          file_name=[var_files(1).folder,'/',var_files(1).name];
 
          date=ncread(file_name,'date');
@@ -88,7 +84,8 @@ for i=4%1:length(output_specification_files)
             if isstruct(dim{vin}{j}.out.info)
                dim{vin}{j}.interp=dim{vin}{j}.out.info.requested;
             elseif strcmp(dim{vin}{j}.out.info,'lev')
-               dim{vin}{j}.out.info=struct('axis','Z','positive','down','long_name','hybrid sigma pressure coordinate','standard_name','atmosphere_hybrid_sigma_pressure_coordinate','formula','p = ap + b*ps','formula_terms','ap: ap b: b ps: ps','valid_max','','valid_min','');
+               dim{vin}{j}.out.info=dimension_info(specification,'standard_hybrid_sigma',cesm_dictionary);
+              % dim{vin}{j}.out.info=struct('axis','Z','positive','down','long_name','hybrid sigma pressure coordinate','standard_name','atmosphere_hybrid_sigma_pressure_coordinate','formula','p = ap + b*ps','formula_terms','ap: ap b: b ps: ps','valid_max','','valid_min','');
             end
  
             %do we need to interpolate the vertical grid?
@@ -107,15 +104,20 @@ for i=4%1:length(output_specification_files)
                dim{vin}{j}.interp='';
             end
          end
-         var{vin}.native.value=ncread(file_name,variable.var{vin});
-         var{vin}.native.name=variable.var{vin};
+         var{vin}.native.value=ncread(file_name,variables{vin});
+         var{vin}.native.name=variables{vin};
 
          %Only load once for this output format
          if load_ps==1
             var_files=dir([dir_input,'*.PS.*']);
             file_name=[var_files(1).folder,'/',var_files(1).name];
-            ps=ncread(file_name,'PS');
-         end 
+            ps.value=ncread(file_name,'PS');
+            for j=1:length(vars)
+               if strcmp(vars{j},'ps')
+                  ps.info=vars_info{j};
+               end
+            end 
+        end 
       end
 
       %Inherit dimensions of input var
@@ -124,8 +126,10 @@ for i=4%1:length(output_specification_files)
 
       %Perform arithmetic operation
       %Eval converts a string to code and executes
-      if ~isempty(variable.eval) 
-         eval(['var_out.native.value=',variable.eval{1},';'])
+      if exist('variable')
+         if ~isempty(variable.eval) 
+            eval(['var_out.native.value=',variable.eval{1},';'])
+         end
       else
          var_out.native=var{1}.native;
       end
@@ -143,7 +147,7 @@ for i=4%1:length(output_specification_files)
                var_out=interpolate_field(var_out.value,j,var_out.dim{j});
                grid_label='gr';
                if load_ps==1
-                  ps_out=interpolate_field(ps_out,j,var_out.dim{j});
+                  ps_out.value=interpolate_field(ps_out.value,j,var_out.dim{j});
                end
             end
             var_out.dim{j}.out.value=dim{vin}{j}.interp;
@@ -157,7 +161,7 @@ for i=4%1:length(output_specification_files)
          for k=1:length(local_var_spec.averaging)
             if strcmp(local_var_spec.averaging{k},dims{j}) && ~strcmp(local_var_spec.averaging{k},'time')
                var_out.native.value=mean(var_out.native.value,j);
-               ps_out=mean(ps_out,j);
+               ps_out.value=mean(ps_out.value,j);
                grid_label=cat(1,grid_label,'z');
             end
          end
@@ -176,10 +180,14 @@ for i=4%1:length(output_specification_files)
          end
       end
       if do_ab~=0
-         var_out.dim{do_ab}.out.a_bnds = create_bnds(a,ai);
-         var_out.dim{do_ab}.out.b_bnds = create_bnds(b,bi);
-         var_out.dim{do_ab}.out.a=a;
-         var_out.dim{do_ab}.out.b=b;
+         var_out.dim{do_ab}.out.formula.a_bnds.value = create_bnds(a,ai);
+         var_out.dim{do_ab}.out.formula.a_bnds.info = get_formula_variable(specification.formula_terms.formula_entry,'a_bnds');
+         var_out.dim{do_ab}.out.formula.b_bnds.value = create_bnds(b,bi);
+         var_out.dim{do_ab}.out.formula.b_bnds.info = get_formula_variable(specification.formula_terms.formula_entry,'b_bnds');
+         var_out.dim{do_ab}.out.formula.a.value=a;
+         var_out.dim{do_ab}.out.formula.a.info = get_formula_variable(specification.formula_terms.formula_entry,'a');
+         var_out.dim{do_ab}.out.formula.b.value=b;
+         var_out.dim{do_ab}.out.formula.b.info = get_formula_variable(specification.formula_terms.formula_entry,'b');
       end
       var_out.info=output_var_details{v};
 
@@ -189,14 +197,24 @@ for i=4%1:length(output_specification_files)
             id_index=j;
          end
       end
-      outfile=[vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
+
+      %Create directory
+      dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v},'/',grid_label,'/'];
+      if ~exist(dir_output)
+         mkdir(dir_output)
+      end
+
+      outfile=[dir_output,vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
               '_',cmor_specification.cmor_case_name,'_',grid_label,'_',cmor_specification.case_dates,'.nc'];
 
       if load_ps==1
-         dump=create_netcdf(var_out,outfile,ps_out);
+         create_netcdf(var_out,outfile,globals,ps_out);
       else
-         dump=create_netcdf(var_out,outfile);
+         create_netcdf(var_out,outfile,globals);
       end 
+     
+      ncdisp(outfile)
+      clear variable
    end
 end
 
@@ -209,10 +227,46 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Get formula variable
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function info=get_formula_variable(formula_terms,var)
+
+names=fieldnames(formula_terms);
+formula_terms=struct2cell(formula_terms);
+for i=1:length(formula_terms)
+   if strcmp(names{i},var)
+      info=formula_terms(i);
+   end
+end
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Get index variables (r#i#f#p#)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function globals=set_index_variables(globals,case_name)
+
+index_vars={'realization_index';'initialization_index';'physics_index';'forcing_index';'variant_label'};
+case_array=convertStringsToChars(case_name);
+
+for i=1:length(index_vars)
+   for j=1:length(globals)
+      if strcmp(globals(j).name,index_vars{i})
+         if ~strcmp(index_vars{i},'variant_label')
+            globals(j).value=case_array(i*2);
+         else
+            globals(j).value=case_name;
+         end
+      end
+   end
+end
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Create NetCDF output file
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function netcdf_dump=create_netcdf(var_out,filename,varargin)
+function netcdf_dump=create_netcdf(var_out,filename,globals,varargin)
 
+lev_ind=[];
 do_ps=0;
 if nargin>2
    ps=varargin{1};
@@ -225,35 +279,101 @@ if exist(filename,'file')==2
    disp('Overwriting existing file')
 end
 ncid=netcdf.create(filename,'NETCDF4');
+varid = netcdf.getConstant('GLOBAL');
+for i=1:length(globals)
+   netcdf.putAtt(ncid,varid,globals(i).name,globals(i).value);
+end
 
 for i=1:length(var_out.dim)
    ndim(i)=length(var_out.dim{i}.out.value);
    if strcmp(var_out.dim{i}.out.name,'time')
-      dim(i)=netcdf.defDim(ncid,var_out.dim{i}.out.name,netcdf.getConstant('NC_UNLIMITED'));
+      dim(i)=netcdf.defDim(ncid,var_out.dim{i}.out.info.out_name,netcdf.getConstant('NC_UNLIMITED'));
    else
-      dim(i)=netcdf.defDim(ncid,var_out.dim{i}.out.name,ndim(i));
+      dim(i)=netcdf.defDim(ncid,var_out.dim{i}.out.info.out_name,ndim(i));
    end
    if do_ps==1
       if ~strcmp(var_out.dim{i}.out.name,'lev')
          ps_dim=cat(1,ps_dim,dim(i));
+      else
+         lev_ind=i;
       end
    end
 end
 dim(i+1)=netcdf.defDim(ncid,'bnds',2);
 
-var=netcdf.defVar(ncid,var_out.info.out_name,'NC_FLOAT',dim);
+var=netcdf.defVar(ncid,var_out.info.out_name,'NC_FLOAT',dim(1:end-1));
+attnames=fieldnames(var_out.info);
+atts=struct2cell(var_out.info);
+for i=1:length(atts)
+   if ~isempty(atts{i}) & sum(strcmp(attnames{i},{'frequency';'realm';'dimensions';'type';'out_name'}))==0
+      netcdf.putAtt(ncid,var,attnames{i},atts{i});
+   end
+end
+
 if do_ps==1
    var_ps=netcdf.defVar(ncid,'ps','NC_FLOAT',ps_dim);
+   attnames=fieldnames(ps.info);
+   atts=struct2cell(ps.info);
+   for i=1:length(atts)
+      if ~isempty(atts{i}) & sum(strcmp(attnames{i},{'frequency';'realm';'dimensions';'type';'out_name'}))==0
+         netcdf.putAtt(ncid,var_ps,attnames{i},atts{i});
+      end
+   end
+   formula_names=fieldnames(var_out.dim{lev_ind}.out.formula);
+   formula=struct2cell(var_out.dim{lev_ind}.out.formula);
+   for i=1:length(formula_names)
+      if sum(size(formula{i}.value)==1)==0
+         formula_dims{i}=[dim(end) dim(lev_ind)];
+      else
+         formula_dims{i}=dim(lev_ind);
+      end
+      var_formula(i)=netcdf.defVar(ncid,formula_names{i},'NC_FLOAT',formula_dims{i});
+      attnames=fieldnames(formula{i}.info{1});
+      atts=struct2cell(formula{i}.info{1});
+      for j=1:length(atts)
+         if ~isempty(atts{j}) & sum(strcmp(attnames{j},{'dimensions';'type';'out_name'}))==0
+            netcdf.putAtt(ncid,var_formula(i),attnames{j},atts{j})
+         end;
+      end
+   end
+end
+for i=1:length(var_out.dim)
+   var_dim(i)=netcdf.defVar(ncid,var_out.dim{i}.out.info.out_name,'NC_FLOAT',dim(i));
+   var_dim_bnds(i)=netcdf.defVar(ncid,[var_out.dim{i}.out.info.out_name,'_bnds'],'NC_FLOAT',[dim(end) dim(i)]);
+   attnames=fieldnames(var_out.dim{i}.out.info);
+   atts=struct2cell(var_out.dim{i}.out.info);
+   for j=1:length(atts)
+       if ~isempty(atts{j}) & sum(strcmp(attnames{j},{'out_name';'must_have_bounds';'stored_direction';'type'}))==0
+          netcdf.putAtt(ncid,var_dim(i),attnames{j},atts{j});
+          netcdf.putAtt(ncid,var_dim_bnds(i),attnames{j},atts{j}); 
+       end
+   end   
+
 end
 
 netcdf.endDef(ncid);
 
-netcdf.putVar(ncid,var,0,size(var_out.native.value,length(size(var_out.native.value)))-1,var_out.native.value);
+start=zeros(length(var_out.dim),1);
+ending=start;
+for i=1:length(ending)
+   ending(i)=length(var_out.dim{i}.out.value);
+end
+netcdf.putVar(ncid,var,start,ending,var_out.native.value);
 if do_ps==1
-   netcdf.putVar(ncid,var_ps,ps);
+   netcdf.putVar(ncid,var_ps,ps.value);
+   for i=1:length(var_formula)
+      netcdf.putVar(ncid,var_formula(i),formula{i}.value);
+   end
+end
+
+for i=1:length(var_out.dim)
+   netcdf.putVar(ncid,var_dim(i),var_out.dim{i}.out.value);
+   netcdf.putVar(ncid,var_dim_bnds(i),var_out.dim{i}.out.bnds);
 end
 
 netcdf.close(ncid);
+
+
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
