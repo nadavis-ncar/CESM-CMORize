@@ -227,6 +227,71 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Convert omega to w
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function w=omega_to_w(omega,lev,lev_num,reference_rho,reference_p)
+
+dimsizes=size(omega);
+num_dims=length(dimsizes);
+dimsizes(dimsized==length(lev))=[];
+lev_mat=repmat(lev(:),cat(1,1,dimsizes));
+
+%Reshape field back to original order
+if lev_num~=1
+   if lev_num==num_dims
+      dims_reshaped=[2:num_dims 1];
+   else
+      dims_reshaped=[2:lev_num 1 lev_num+1:num_dims];
+   end
+   lev_mat=permute(lev_mat,dims_reshaped);
+end
+
+rho=reference_rho.*lev_mat/reference_p;
+w=rho*9.81*omega;
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Calculate maximum value
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function maximum=calculate_maximum(data,dim_num)
+
+maximum=max(data,[],dim_num);
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Calculate integral
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function integrated=calculate_integral(data,dim,dim_num)
+
+integrated=trapz(dim,data,dim_num);
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Calculate age of air
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function aoa=age_of_air(tracer,p_ref,lat_ref)
+
+aoa_out=zeros(size(tracer));
+
+%detect time, pres, lat, lon dimensions
+
+%copied from existing script - expand to lon, arbitrary dims
+for p=1:size(data,2)
+   for y=1:size(data,3)
+      local_tseries=simple_filter(squeeze(data(:,p,y)),12,'lowpass','taper');
+      for t=tstart:size(data,1)
+         [val,loc]=min(abs(local_tseries(t)-reference_timeseries));
+         aoa_out(t,p,y)=(t-loc)/12;
+      end
+   end
+end
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Get formula variable
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function info=get_formula_variable(formula_terms,var)
