@@ -35,8 +35,9 @@ for i=4%1:length(output_specification_files)
 
    output_var_details=struct2cell(output_file.variable_entry);  
    %Output file for each variable
-   for v=31%1:length(vars)
-
+   for v=23%1:length(vars)
+      tic
+      disp(vars{v})
 
       local_var_spec=vars_info{v};
  
@@ -54,11 +55,15 @@ for i=4%1:length(output_specification_files)
 
       %Gather variable info, special operations, scale_factors; or just load the variable 
       if length(variables_list)==1 & ~isstruct(variables_list) 
-         variables{1}=variables_list;
+         variables.var{1}=variables_list;
+         variables.operation=[];
+         variables.eval=[];
       else
          [variables]=translate_cesm_variable(variables_list);
       end
       load_ps=0;
+      save_ps=0;
+      load_lev=0;
 
       %Grab global variables for the file
       globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output,cmor_specification,specification,frequency,vars{v});
@@ -72,42 +77,76 @@ for i=4%1:length(output_specification_files)
          date=ncread(file_name,'date');
          time=ncread(file_name,'time');
          dims=parse_string(local_var_spec.dimensions);
+
+         %Get dimensions of input variable
+         file_structure=ncinfo(file_name);
+         for j=1:length(file_structure.Variables)
+            if strcmp(file_structure.Variables(j).Name,variables.var{vin})
+               for k=1:length(ncinfo(file_name).Variables(j).Dimensions)
+                  dim_native_names{k}=ncinfo(file_name).Variables(j).Dimensions(k).Name;
+                  dim_native(k)=k;
+               end       
+            end
+         end 
+
+         %Load dimension info, connect output dims to input dims
          for j=1:length(dims)
             dim{vin}{j}.native.name=translate_cesm(cesm_dictionary,dims{j},'Dimension');    
+            dim{vin}{j}.native.ind=find(strcmp(dim_native,dim{vin}{j}.native.name),1,'first');
+            dim_native(strcmp(dim{vin}{j}.native.name,dim_native_names))=[];
+            dim_native_names(strcmp(dim{vin}{j}.native.name,dim_native_names))=[]; 
             dim{vin}{j}.native.value=ncread(file_name,dim{vin}{j}.native.name);
             dim{vin}{j}.out.name=dims{j};
             dim{vin}{j}.out.info=dimension_info(specification,dims{j},cesm_dictionary);
             dim{vin}{j}.interp_special='';
             
-            %is there a requested grid for this dimension?
-            if isstruct(dim{vin}{j}.out.info)
-               dim{vin}{j}.interp=dim{vin}{j}.out.info.requested;
-            elseif strcmp(dim{vin}{j}.out.info,'lev')
+            %Assimilate MIP lev info
+            if strcmp(dim{vin}{j}.out.info,'lev')
                dim{vin}{j}.out.info=dimension_info(specification,'standard_hybrid_sigma',cesm_dictionary);
-              % dim{vin}{j}.out.info=struct('axis','Z','positive','down','long_name','hybrid sigma pressure coordinate','standard_name','atmosphere_hybrid_sigma_pressure_coordinate','formula','p = ap + b*ps','formula_terms','ap: ap b: b ps: ps','valid_max','','valid_min','');
             end
- 
+            
             %do we need to interpolate the vertical grid?
-            if strcmp(dim{vin}{j}.native.name,'lev')
-               lev_dim=i;
+            if strcmp(dim{vin}{j}.native.name,'lev')                
+               lev_dim=j;
+               load_lev=1;
+               load_ps=1;
+               save_ps=1;
                if strcmp(dim{vin}{j}.out.name,'alevel')
                   dim{vin}{j}.out.name='lev';
                   dim{vin}{j}.interp='';
                end
                dim{vin}{j}.interp_special='vertical';
-               load_ps=1;
-               a=ncread(file_name,'hyam')*1e5;
-               b=ncread(file_name,'hybm');
-               ai=ncread(file_name,'hyai')*1e5;
-               bi=ncread(file_name,'hybi');
-               ilev=ncread(file_name,'ilev');
                dim{vin}{j}.interp='';
             end
+
+            %Add consistent time units
+            if strcmp(dim{vin}{j}.native.name,'time')
+               dim{vin}{j}.out.info.units=ncreadatt(file_name,'time','units');
+            end
          end
+
+         %Is lev dimension being removed? Probably need to load fields
+         if ~isempty(dim_native)
+            if strcmp(dim_native_names,'lev')
+               load_lev=1;
+               load_ps=1;
+            end 
+         end
+    
+         %Load lev formula fields
+         if load_lev==1  
+            a=ncread(file_name,'hyam')*1e5;
+            b=ncread(file_name,'hybm');
+            ai=ncread(file_name,'hyai')*1e5;
+            bi=ncread(file_name,'hybi');
+            ilev=ncread(file_name,'ilev');
+         end
+ 
+         %Load variable
          var{vin}.native.value=ncread(file_name,variables.var{vin});
          var{vin}.native.name=variables.var{vin};
 
-         %Only load once for this output format
+         %Load ps
          if load_ps==1
             var_files=dir([dir_input,'*.PS.*']);
             file_name=[var_files(1).folder,'/',var_files(1).name];
@@ -116,13 +155,18 @@ for i=4%1:length(output_specification_files)
                if strcmp(vars{j},'ps')
                   ps.info=vars_info{j};
                end
-            end 
+            end
+             
         end 
       end
 
       %Inherit dimensions of input var
       var_out.dim=dim{1};
       ps_out=ps;
+
+      %Note dimensions to be removed (must be empty to save variable)
+      var_out.dim_names_to_remove=dim_native_names;
+      var_out.dim_to_remove=dim_native;
 
       %Perform arithmetic operation
       %Eval converts a string to code and executes
@@ -135,30 +179,31 @@ for i=4%1:length(output_specification_files)
       end
 
       %Special operations - omega to wa, age of air, integrate, max value
+      %Need to calculate three based on ps-pres field
       if ~isempty(variables.operation)
          operation=variables.operation;
          switch operation
             case 'age_of_air'
                disp('calculating age of air')
-               var_out=age_of_air(var_out,variables.p0,variables.lat0)
+               var_out=age_of_air(var_out,variables.p0,variables.lat0);
             case 'integral'
-               var_out=calculate_integral(var_out,variables.axis)
-            case 'maximum'
-               var_oute=calculate_maximum(var_out,variables.axis)
+               var_out=calculate_integral(var_out,variables.axis,ps_out,a,b);
+            case 'max_value'
+               var_out=calculate_maximum(var_out,variables.axis);
             case 'omega_to_w'
-               var_out=omega_to_w(var_out,var_out.dim{lev_dim}.native.value,...
-                  lev_dim,str2num(variables.reference_rho),str2num(variables.reference_p));
+               var_out.temp=var{2}.native.value;
+               var_out=omega_to_w(var_out,ps_out,a,b);
          end
       end
  
       grid_label='gn';
       %Do any interpolation
       for j=1:length(var_out.dim) 
-         if strcmp(var_out.dim{j}.interp,'interpolate')
+         if ~isempty(var_out.dim{j}.out.info.requested)
             if strcmp(var_out.dim{j}.interp_special,'vertical')
-               var_out=interpolate_field(var_out.value,j,var_out.dim{j},a,b,ps);
+               var_out=interpolate_field(var_out.native.value,j,var_out.dim{j},a,b,ps);
             else
-               var_out=interpolate_field(var_out.value,j,var_out.dim{j});
+               var_out=interpolate_field(var_out.native.value,j,var_out.dim{j});
                grid_label='gr';
                if load_ps==1
                   ps_out.value=interpolate_field(ps_out.value,j,var_out.dim{j});
@@ -188,7 +233,7 @@ for i=4%1:length(output_specification_files)
             var_out.dim{j}.out.bnds = create_bnds(var_out.dim{j}.out,ilev);
             do_ab=j;
          elseif strcmp(var_out.dim{j}.out.name,'time')
-            var_out.dim{j}.out.bnds=ncread(file_name,'time_bnds');
+            var_out.dim{j}.out.bnds= ncread(file_name,'time_bnds');
          else
             var_out.dim{j}.out.bnds = create_bnds(var_out.dim{j}.out);
          end
@@ -221,14 +266,15 @@ for i=4%1:length(output_specification_files)
       outfile=[dir_output,vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
               '_',cmor_specification.cmor_case_name,'_',grid_label,'_',cmor_specification.case_dates,'.nc'];
 
-      if load_ps==1
+      if save_ps==1
          create_netcdf(var_out,outfile,globals,ps_out);
       else
          create_netcdf(var_out,outfile,globals);
       end 
      
-      ncdisp(outfile)
-      clear variable
+      clear variables variable dim dim_native
+     
+      toc
    end
 end
 
@@ -239,56 +285,61 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Convert omega to w
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function w=omega_to_w(omega,lev,lev_num,reference_rho,reference_p)
+function data=omega_to_w(data,ps,a,b)
 
-dimsizes=size(omega);
-num_dims=length(dimsizes);
-dimsizes(dimsized==length(lev))=[];
-lev_mat=repmat(lev(:),cat(1,1,dimsizes));
+ps=repmat(ps,[ones(1,length(size(ps))) length(a)]);
+a=permute(repmat(a(:),[1 size(ps)]),[2:length(size(ps))+1 1]);
+b=permute(repmat(b(:),[1 size(ps)]),[2:length(size(ps))+1 1]);
+size(a)
+size(b)
+size(ps)
+pres=a+b.*ps;
 
 %Reshape field back to original order
-if lev_num~=1
-   if lev_num==num_dims
-      dims_reshaped=[2:num_dims 1];
-   else
-      dims_reshaped=[2:lev_num 1 lev_num+1:num_dims];
-   end
-   lev_mat=permute(lev_mat,dims_reshaped);
-end
-
-rho=reference_rho.*lev_mat/reference_p;
-w=rho*9.81*omega;
+size(pres)
+rho=pres./(287*data.temp);
+data.native.value=rho*9.81*data.native.value;
 
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Calculate maximum value
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function maximum=calculate_maximum(data,dim_name)
+function data=calculate_maximum(data,dim_name)
 
-for i=1:length(data.dim)
-   if strcmp(data.dim{i}.name,dim_name)
-      dim_num=i;
-   end
-end
+dim_num=data.dim_to_remove(find(strcmp(data.dim_names_to_remove,dim_name),1,'first'));
 data.native.value=squeeze(max(data.native.value,[],dim_num));
-data.dim(dim_num)=[];
 
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Calculate integral
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function data=calculate_integral(data,dim_name)
+function data=calculate_integral(data,dim_name,varargin)
 
-for i=1:length(data.dim)
-   if strcmp(data.dim{i}.name,dim_name)
-      dim_num=i;
+dim_num=data.dim_to_remove(find(strcmp(data.dim_names_to_remove,dim_name),1,'first'));
+
+if strcmp(data.dim_names_to_remove,'lev')
+   ps=varargin{1};
+   a=varargin{2};
+   b=varargin{3};
+
+   ps=repmat(ps,[ones(length(size(ps)),1) length(a)]);
+   a=permute(repmat(a(:),[1 size(ps)]),[2:length(size(ps)) 1]);
+   b=permute(repmat(b(:),[1 size(ps)]),[2:length(size(ps)) 1]);
+
+   pres=a+ps.*b;
+   for i=1:size(ps,1)
+      for j=1:size(ps,2)
+         for t=1:size(data.native.value,4)
+            data_out(i,j,t)=trapz(squeeze(pres(i,j,t,:)),dim.native.value(i,j,:,t)); 
+         end
+      end
    end
+   data.native.value=data_out; 
+else
+   data.native.value=squeeze(trapz(data.dim{dim_num}.native.value,data.native.value,dim_num));
 end
-dim=data.dim{dim_num}.native.value;
-data.native.value=squeeze(trapz(dim,data.native.value,dim_num));
-data.dim(dim_num)=[];
 
 end
 
@@ -398,11 +449,11 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Create NetCDF output file
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function netcdf_dump=create_netcdf(var_out,filename,globals,varargin)
+function create_netcdf(var_out,filename,globals,varargin)
 
 lev_ind=[];
 do_ps=0;
-if nargin>2
+if nargin>3
    ps=varargin{1};
    ps_dim=[];
    do_ps=1;
