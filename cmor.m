@@ -35,7 +35,8 @@ for i=4%1:length(output_specification_files)
 
    output_var_details=struct2cell(output_file.variable_entry);  
    %Output file for each variable
-   for v=21%1:length(vars)
+   for v=31%1:length(vars)
+
 
       local_var_spec=vars_info{v};
  
@@ -52,13 +53,11 @@ for i=4%1:length(output_specification_files)
       dir_input=[dir_input_main,realm,'/proc/tseries/',frequency,'_1/',cmor_specification.case_name]; 
 
       %Gather variable info, special operations, scale_factors; or just load the variable 
-      if length(variables_list)==1
+      if length(variables_list)==1 & ~isstruct(variables_list) 
          variables{1}=variables_list;
       else
-         [variable]=translate_cesm_variable(variables_list);
-         variables=variable.in;
+         [variables]=translate_cesm_variable(variables_list);
       end
-         
       load_ps=0;
 
       %Grab global variables for the file
@@ -66,8 +65,8 @@ for i=4%1:length(output_specification_files)
       globals=set_index_variables(globals,cmor_specification.cmor_case_name);
     
       %Load variable(s) 
-      for vin=1:length(variables)
-         var_files=dir([dir_input,'*.',variables{vin},'.*']);
+      for vin=1:length(variables.var)
+         var_files=dir([dir_input,'*.',variables.var{vin},'.*']);
          file_name=[var_files(1).folder,'/',var_files(1).name];
 
          date=ncread(file_name,'date');
@@ -90,6 +89,7 @@ for i=4%1:length(output_specification_files)
  
             %do we need to interpolate the vertical grid?
             if strcmp(dim{vin}{j}.native.name,'lev')
+               lev_dim=i;
                if strcmp(dim{vin}{j}.out.name,'alevel')
                   dim{vin}{j}.out.name='lev';
                   dim{vin}{j}.interp='';
@@ -104,8 +104,8 @@ for i=4%1:length(output_specification_files)
                dim{vin}{j}.interp='';
             end
          end
-         var{vin}.native.value=ncread(file_name,variables{vin});
-         var{vin}.native.name=variables{vin};
+         var{vin}.native.value=ncread(file_name,variables.var{vin});
+         var{vin}.native.name=variables.var{vin};
 
          %Only load once for this output format
          if load_ps==1
@@ -126,8 +126,8 @@ for i=4%1:length(output_specification_files)
 
       %Perform arithmetic operation
       %Eval converts a string to code and executes
-      if exist('variable')
-         if ~isempty(variable.eval) 
+      if isstruct('variables')
+         if ~isempty(variables.eval) 
             eval(['var_out.native.value=',variable.eval{1},';'])
          end
       else
@@ -135,7 +135,21 @@ for i=4%1:length(output_specification_files)
       end
 
       %Special operations - omega to wa, age of air, integrate, max value
-      %%%Todo        
+      if ~isempty(variables.operation)
+         operation=variables.operation;
+         switch operation
+            case 'age_of_air'
+               disp('calculating age of air')
+               var_out=age_of_air(var_out,variables.p0,variables.lat0)
+            case 'integral'
+               var_out=calculate_integral(var_out,variables.axis)
+            case 'maximum'
+               var_oute=calculate_maximum(var_out,variables.axis)
+            case 'omega_to_w'
+               var_out=omega_to_w(var_out,var_out.dim{lev_dim}.native.value,...
+                  lev_dim,str2num(variables.reference_rho),str2num(variables.reference_p));
+         end
+      end
  
       grid_label='gn';
       %Do any interpolation
@@ -218,10 +232,6 @@ for i=4%1:length(output_specification_files)
    end
 end
 
-
-
-
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %FUNCTIONS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -254,40 +264,97 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Calculate maximum value
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function maximum=calculate_maximum(data,dim_num)
+function maximum=calculate_maximum(data,dim_name)
 
-maximum=max(data,[],dim_num);
+for i=1:length(data.dim)
+   if strcmp(data.dim{i}.name,dim_name)
+      dim_num=i;
+   end
+end
+data.native.value=squeeze(max(data.native.value,[],dim_num));
+data.dim(dim_num)=[];
 
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Calculate integral
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function integrated=calculate_integral(data,dim,dim_num)
+function data=calculate_integral(data,dim_name)
 
-integrated=trapz(dim,data,dim_num);
+for i=1:length(data.dim)
+   if strcmp(data.dim{i}.name,dim_name)
+      dim_num=i;
+   end
+end
+dim=data.dim{dim_num}.native.value;
+data.native.value=squeeze(trapz(dim,data.native.value,dim_num));
+data.dim(dim_num)=[];
 
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Calculate age of air
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function aoa=age_of_air(tracer,p_ref,lat_ref)
+function tracer=age_of_air(tracer,p_ref,y_ref)
 
-aoa_out=zeros(size(tracer));
+aoa=zeros(size(tracer.native.value));
 
-%detect time, pres, lat, lon dimensions
+%Setup indexing for eval
+dim_string='(';
+for i=1:length(size(tracer.native.value))
+   dim_name=tracer.dim{i}.native.name;
+   switch dim_name
+      case 'time'
+         string_add=':';
+         time_dim=i;
+      case 'lev'
+         string_add='p';
+         lev_dim=i;
+      case 'lat'
+         string_add='y';
+         lat_dim=i;
+      case 'lon'
+         string_add='x';
+         lon_dim=i;
+      otherwise
+         error('Unrecognized dimension name, cannot compute age of air')
+   end
+   if i<length(size(tracer.native.value))
+      string_add=[string_add,','];
+   else
+      string_add=[string_add,')'];
+   end
+   dim_string=[dim_string,string_add];
+end
+time_string=strrep(dim_string,':','t');
+ref_string=strrep(dim_string,'x',':');
+ref_string=strrep(ref_string,'y','y_ref');
+ref_string=strrep(ref_string,'p','p_ref');
 
-%copied from existing script - expand to lon, arbitrary dims
-for p=1:size(data,2)
-   for y=1:size(data,3)
-      local_tseries=simple_filter(squeeze(data(:,p,y)),12,'lowpass','taper');
-      for t=tstart:size(data,1)
-         [val,loc]=min(abs(local_tseries(t)-reference_timeseries));
-         aoa_out(t,p,y)=(t-loc)/12;
+%Get reference value
+[val,y_ref]=min(abs(tracer.dim{lat_dim}.native.value-y_ref));
+[val,p_ref]=min(abs(tracer.dim{lev_dim}.native.value-p_ref));
+
+tracer.native.value=movmean(tracer.native.value,12,time_dim);
+reference_timeseries=eval(['squeeze(mean(tracer.native.value',ref_string,',',num2str(lon_dim),'));']);
+reference_timeseries=repmat(reference_timeseries(:),[1 length(reference_timeseries)]);
+
+nt=size(tracer.native.value,time_dim);
+
+%Calculate aoa
+for y=1:length(tracer.dim{lat_dim}.native.value)
+   disp([sprintf('%2.2f',100*(y-1)/length(tracer.dim{lat_dim}.native.value)),'% complete'])
+   for x=1:length(tracer.dim{lon_dim}.native.value)
+      for p=1:length(tracer.dim{lev_dim}.native.value)
+         timeseries=eval(['squeeze(tracer.native.value',dim_string,')']);
+         timeseries=repmat(timeseries(:),[1 length(timeseries)])';
+         [val,time_index]=min(abs(timeseries-reference_timeseries),[],2);
+         eval(['aoa',dim_string,'=(time_index''-[1:nt])/12;']);
       end
    end
 end
+
+tracer.native.value=aoa;
 
 end
 
@@ -305,6 +372,7 @@ for i=1:length(formula_terms)
 end
 
 end
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Get index variables (r#i#f#p#)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -326,6 +394,7 @@ for i=1:length(index_vars)
 end
 
 end
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Create NetCDF output file
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -705,8 +774,8 @@ end
 function [variable_out]=translate_cesm_variable(in)
 
 in_components=fieldnames(in);
-variables_components={'var';'operation';'eval'};
-variable_out=struct('var',strings(0),'operation',strings(0),'eval',strings(0));
+variables_components={'var';'operation';'eval';'p0';'lat0';'axis'};
+variable_out=struct('var',strings(0),'operation',strings(0),'eval',strings(0),'p0',[],'lat0',[],'axis',strings(0));
 
 for i=1:length(in_components)
    for j=1:length(variables_components)
