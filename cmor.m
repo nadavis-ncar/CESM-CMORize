@@ -17,7 +17,6 @@ output_specification_files=remove_entries(output_specification_files,specificati
 %Load CESM->MIP variable dictionary
 %Includes information for translating MIP requests for frequency, realm, etc.
 cesm_dictionary=json_load(cmor_specification.cmor_variable_dictionary);
-
 cesm_globals=json_load(['cesm_global_attributes_Amon.json']);
 cesm_globals_names=fieldnames(cesm_globals);
 
@@ -34,8 +33,11 @@ for i=4%1:length(output_specification_files)
    vars_info=struct2cell(output_file.variable_entry); 
 
    output_var_details=struct2cell(output_file.variable_entry);  
+  
+   version=['v',datestr(now,'yyyymmdd')];
+
    %Output file for each variable
-   for v=23%1:length(vars)
+   for v=16:length(vars)
       tic
       disp(vars{v})
 
@@ -54,10 +56,11 @@ for i=4%1:length(output_specification_files)
       dir_input=[dir_input_main,realm,'/proc/tseries/',frequency,'_1/',cmor_specification.case_name]; 
 
       %Gather variable info, special operations, scale_factors; or just load the variable 
-      if length(variables_list)==1 & ~isstruct(variables_list) 
+      if ~isstruct(variables_list) 
          variables.var{1}=variables_list;
          variables.operation=[];
          variables.eval=[];
+         variables.unit_change=[];
       else
          [variables]=translate_cesm_variable(variables_list);
       end
@@ -114,6 +117,9 @@ for i=4%1:length(output_specification_files)
                if strcmp(dim{vin}{j}.out.name,'alevel')
                   dim{vin}{j}.out.name='lev';
                   dim{vin}{j}.interp='';
+               elseif strcmp(dim{vin}{j}.out.name,'alevhalf')
+                  dim{vin}{j}.out.name='lev';
+                  dim{vin}{j}.interp='';
                end
                dim{vin}{j}.interp_special='vertical';
                dim{vin}{j}.interp='';
@@ -149,11 +155,11 @@ for i=4%1:length(output_specification_files)
          %Load ps
          if load_ps==1
             var_files=dir([dir_input,'*.PS.*']);
-            file_name=[var_files(1).folder,'/',var_files(1).name];
-            ps.value=ncread(file_name,'PS');
+            file_name_ps=[var_files(1).folder,'/',var_files(1).name];
+            ps_out.value=ncread(file_name_ps,'PS');
             for j=1:length(vars)
                if strcmp(vars{j},'ps')
-                  ps.info=vars_info{j};
+                  ps_out.info=vars_info{j};
                end
             end
              
@@ -162,7 +168,6 @@ for i=4%1:length(output_specification_files)
 
       %Inherit dimensions of input var
       var_out.dim=dim{1};
-      ps_out=ps;
 
       %Note dimensions to be removed (must be empty to save variable)
       var_out.dim_names_to_remove=dim_native_names;
@@ -170,10 +175,15 @@ for i=4%1:length(output_specification_files)
 
       %Perform arithmetic operation
       %Eval converts a string to code and executes
-      if isstruct('variables')
+      if isstruct(variables)
          if ~isempty(variables.eval) 
-            eval(['var_out.native.value=',variable.eval{1},';'])
-         end
+            eval(['var_out.native.value=',variables.eval{1},';'])
+         else
+            var_out.native=var{1}.native;
+            if length(var)>1
+               var_out.native_secondary=var{2}.native;
+            end
+         end 
       else
          var_out.native=var{1}.native;
       end
@@ -186,17 +196,28 @@ for i=4%1:length(output_specification_files)
             case 'age_of_air'
                disp('calculating age of air')
                var_out=age_of_air(var_out,variables.p0,variables.lat0);
-            case 'integral'
-               var_out=calculate_integral(var_out,variables.axis,ps_out,a,b);
+            case 'sum'
+               var_out=calculate_sum(var_out,variables.axis,ps_out.value,a,b);
+            case 'ozone_integral'
+               var_out=convert_units(var_out,ps_out.value,a,b,'molar_mixing_ratio_to_DU');
+               if strcmp(fieldnames(var_out),'native_secondary')
+                  var_out=calculate_integral(var_out,ps_out.value,a,b,'tropopause');
+               else
+                  var_out=calculate_integral(var_out,ps_out.value,a,b);
+               end
+            case 'burden'
+               var_out=convert_units(var_out,ps_out.value,a,b,'number_density_to_molar_mixing_ratio');
+               var_out=calculate_integral(var_out,ps_out.value,a,b);
             case 'max_value'
                var_out=calculate_maximum(var_out,variables.axis);
             case 'omega_to_w'
                var_out.temp=var{2}.native.value;
-               var_out=omega_to_w(var_out,ps_out,a,b);
+               var_out=omega_to_w(var_out,ps_out.value,a,b);
          end
       end
- 
+
       grid_label='gn';
+
       %Do any interpolation
       for j=1:length(var_out.dim) 
          if ~isempty(var_out.dim{j}.out.info.requested)
@@ -238,6 +259,8 @@ for i=4%1:length(output_specification_files)
             var_out.dim{j}.out.bnds = create_bnds(var_out.dim{j}.out);
          end
       end
+ 
+      %Bnd variables (vertical)
       if do_ab~=0
          var_out.dim{do_ab}.out.formula.a_bnds.value = create_bnds(a,ai);
          var_out.dim{do_ab}.out.formula.a_bnds.info = get_formula_variable(specification.formula_terms.formula_entry,'a_bnds');
@@ -248,9 +271,10 @@ for i=4%1:length(output_specification_files)
          var_out.dim{do_ab}.out.formula.b.value=b;
          var_out.dim{do_ab}.out.formula.b.info = get_formula_variable(specification.formula_terms.formula_entry,'b');
       end
+
       var_out.info=output_var_details{v};
 
-      %Save to file
+      %Model name
       for j=1:length(globals)
          if strcmp(globals(j).name,'source_id')
             id_index=j;
@@ -258,94 +282,135 @@ for i=4%1:length(output_specification_files)
       end
 
       %Create directory
-      dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v},'/',grid_label,'/'];
+      dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v},'/',grid_label,'/',version,'/'];
       if ~exist(dir_output)
          mkdir(dir_output)
       end
 
+      %Output file name
       outfile=[dir_output,vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
               '_',cmor_specification.cmor_case_name,'_',grid_label,'_',cmor_specification.case_dates,'.nc'];
 
+      %Save to file
       if save_ps==1
          create_netcdf(var_out,outfile,globals,ps_out);
       else
          create_netcdf(var_out,outfile,globals);
       end 
      
-      clear variables variable dim dim_native
+      clear variables dim dim_native var_out ps_out
      
       toc
    end
 end
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %FUNCTIONS
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Convert omega to w
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function data=omega_to_w(data,ps,a,b)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Expand surface pressure to full pressure field with hybrid coefficients
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function pres=calculate_pressure(ps,a,b)
 
-ps=repmat(ps,[ones(1,length(size(ps))) length(a)]);
-a=permute(repmat(a(:),[1 size(ps)]),[2:length(size(ps))+1 1]);
-b=permute(repmat(b(:),[1 size(ps)]),[2:length(size(ps))+1 1]);
-size(a)
-size(b)
-size(ps)
-pres=a+b.*ps;
-
-%Reshape field back to original order
-size(pres)
-rho=pres./(287*data.temp);
-data.native.value=rho*9.81*data.native.value;
+ps_mat=permute(repmat(ps,[ones(1,length(size(ps))) length(a)]),[1 2 4 3]);
+a=permute(repmat(a(:),[1 size(ps)]),[2 3 1 4]);
+b=permute(repmat(b(:),[1 size(ps)]),[2 3 1 4]);
+pres=a+b.*ps_mat;
 
 end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Convert units 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function data=convert_units(data,ps,a,b,conversion)
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Calculate maximum value
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+if strcmp(conversion,'number_density_to_molar_mixing_ratio')
+   pres=calculate_pressure(ps,a,b);
+
+   rho=pres./(287*data.native_secondary.value);
+   n_air=(6.02e23/0.028)*rho;
+
+   data.native.value=(100^3)*data.native.value./n_air;
+elseif strcmp(conversion,'molar_mixing_ratio_to_DU')
+   data.native.value=data.native.value*(48/29)*(287*273.15/1e5);
+end
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Convert omega to w
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function data=omega_to_w(data,ps,a,b)
+
+pres=calculate_pressure(ps,a,b);
+data.native.value=9.81*(pres./(287*data.temp)).*data.native.value;
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Calculate maximum value along arbitrary dimension
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function data=calculate_maximum(data,dim_name)
 
 dim_num=data.dim_to_remove(find(strcmp(data.dim_names_to_remove,dim_name),1,'first'));
 data.native.value=squeeze(max(data.native.value,[],dim_num));
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Calculate integral
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function data=calculate_integral(data,dim_name,varargin)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Calculate sum along arbitrary dimension
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function data=calculate_sum(data,dim_name,varargin)
 
 dim_num=data.dim_to_remove(find(strcmp(data.dim_names_to_remove,dim_name),1,'first'));
+data.native.value=squeeze(sum(data.native.value,dim_num));
 
-if strcmp(data.dim_names_to_remove,'lev')
-   ps=varargin{1};
-   a=varargin{2};
-   b=varargin{3};
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Calculate integral in pressure
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function data=calculate_integral(data,varargin)
 
-   ps=repmat(ps,[ones(length(size(ps)),1) length(a)]);
-   a=permute(repmat(a(:),[1 size(ps)]),[2:length(size(ps)) 1]);
-   b=permute(repmat(b(:),[1 size(ps)]),[2:length(size(ps)) 1]);
+data_out=zeros(size(data.native.value,1),size(data.native.value,2),size(data.native.value,4));
 
-   pres=a+ps.*b;
-   for i=1:size(ps,1)
-      for j=1:size(ps,2)
-         for t=1:size(data.native.value,4)
-            data_out(i,j,t)=trapz(squeeze(pres(i,j,t,:)),dim.native.value(i,j,:,t)); 
+do_trop=0;
+
+ps=varargin{1};
+a=varargin{2};
+b=varargin{3};
+
+pres=calculate_pressure(ps,a,b);
+
+%Tropospheric integral?
+if nargin>5
+   if strcmp('tropopause',varargin{4})
+      do_trop=1;
+      trop=data.native_secondary.value;
+   end
+end
+
+%Loop over all columns and integrate
+for i=1:size(ps,1)
+   disp([sprintf('%3.0f',100*i/size(ps,1)),'% complete'])
+   for j=1:size(ps,2)
+      for t=1:size(data.native.value,4)
+         if do_trop==1
+            [val,trop_ind]=min(abs(squeeze(trop(i,j,t)) - squeeze(pres(i,j,t,:))));
+            if pres(i,j,t,trop_ind)>trop(i,j,t)
+               trop_ind=trop_ind-1;
+            end
+            data_out(i,j,t)=trapz(squeeze(pres(i,j,trop_ind+1:end,t)),data.native.value(i,j,trop_ind+1:end,t));
+            data_out(i,j,t)=data_out(i,j,t)+(pres(i,j,trop_ind+1,t)-trop(i,j,t))*data.native.value(i,j,trop_ind,t);
+         else
+            data_out(i,j,t)=trapz(squeeze(pres(i,j,:,t)),squeeze(data.native.value(i,j,:,t)));
          end
       end
    end
-   data.native.value=data_out; 
-else
-   data.native.value=squeeze(trapz(data.dim{dim_num}.native.value,data.native.value,dim_num));
 end
+   
+data.native.value=data_out/9.81; 
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Calculate age of air
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function tracer=age_of_air(tracer,p_ref,y_ref)
 
 aoa=zeros(size(tracer.native.value));
@@ -392,7 +457,7 @@ reference_timeseries=repmat(reference_timeseries(:),[1 length(reference_timeseri
 
 nt=size(tracer.native.value,time_dim);
 
-%Calculate aoa
+%Calculate aoa using the matrix method
 for y=1:length(tracer.dim{lat_dim}.native.value)
    disp([sprintf('%2.2f',100*(y-1)/length(tracer.dim{lat_dim}.native.value)),'% complete'])
    for x=1:length(tracer.dim{lon_dim}.native.value)
@@ -408,10 +473,9 @@ end
 tracer.native.value=aoa;
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Get formula variable
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Get hybrid coefficient formula attributes 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function info=get_formula_variable(formula_terms,var)
 
 names=fieldnames(formula_terms);
@@ -423,10 +487,9 @@ for i=1:length(formula_terms)
 end
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Get index variables (r#i#f#p#)
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Get index variables for model run (r#i#f#p#)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function globals=set_index_variables(globals,case_name)
 
 index_vars={'realization_index';'initialization_index';'physics_index';'forcing_index';'variant_label'};
@@ -445,10 +508,9 @@ for i=1:length(index_vars)
 end
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Create NetCDF output file
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function create_netcdf(var_out,filename,globals,varargin)
 
 lev_ind=[];
@@ -558,12 +620,10 @@ end
 
 netcdf.close(ncid);
 
-
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Determine which dims need to be averaged
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function averaging=averaging_flags(cell_methods)
 
 parsed=parse_string(cell_methods);
@@ -594,10 +654,9 @@ while ~isempty(parsed)
 end
       
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Create bounding variables
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function bnds=create_bnds(dim_in,varargin)
 
 if isstruct(dim_in)
@@ -653,9 +712,9 @@ else
 end
 
 end
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Interpolates along specified dimension
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function field_out=interpolate_field(field,interp_dim,dim,varargin)
 
 %Optional: load in surface pressure, a/b's for vertical interp, generate pressure array
@@ -664,9 +723,7 @@ if nargin>3
    b=varargin{2};
    ps=varargin{3};
 
-   ps=repmat(ps,[ones(length(size(ps)),1) length(a)]);
-   a=permute(repmat(a(:),[1 size(ps)]),[2:length(size(ps)) 1]);
-   b=permute(repmat(b(:),[1 size(ps)]),[2:length(size(ps)) 1]);
+   pres=calculate_pressure(ps,a,b);
 
    dim.native.value=a+ps.*b;
    dim_reshape=1;
@@ -726,10 +783,9 @@ end
 field_out=permute(field_out,dims_reshaped); 
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Collapse a field to a specified matrix rank
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function field=collapse_field(field,rank)
 
 dimsizes=length(size(field));
@@ -757,11 +813,9 @@ if length(field)>rank
 end
 
 end
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Expand a field to an arbitrary matrix rank of 4
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function field=expand_field(field)
 
 dimsizes=size(field);
@@ -775,9 +829,9 @@ if padding>0
 end
 
 end
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Returns dimension information from spec
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Returns dimension information from specification
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function info=dimension_info(specification,dimension,dictionary)
 
 info=strings(0);
@@ -793,9 +847,9 @@ if isempty(info)
 end
 
 end
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Returns the index of the matching field
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function ind=return_index(structure,field)
  
 names=fieldnames(structure);
@@ -806,10 +860,9 @@ for i=1:length(names)
 end
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Parses a string into individual words
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function parsed=parse_string(in)
 
 parsed = strings(0);
@@ -819,9 +872,9 @@ while (in ~= "")
 end
 
 end
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Translate variable details, make actionable
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function [variable_out]=translate_cesm_variable(in)
 
 in_components=fieldnames(in);
@@ -837,11 +890,9 @@ for i=1:length(in_components)
 end
 
 end
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Scan dictionary and return field
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function out=translate_cesm(dictionary,in,field)
 
 dictionary_entries=fieldnames(eval(['dictionary.',field]));
@@ -852,10 +903,9 @@ for i=1:length(dictionary_entries)
 end
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Gather required global attributes
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function globals=global_attributes(required_attributes,CV_file,output,cmor_specification,specification,frequency,var)
    
 globals=struct;
@@ -899,10 +949,9 @@ for i=1:length(required_attributes)
 end
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Remove entries from a list
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function list=remove_entries(list,entries)
 
 delete_list=[];
@@ -916,10 +965,9 @@ end
 list(delete_list)=[];
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Load file and decode json
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function decoded=json_load(file)
 fid = fopen(file);
 raw = fread(fid,inf);
@@ -928,10 +976,9 @@ fclose(fid);
 decoded=jsondecode(str);
 
 end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Load specification files
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function [specification,specification_files]=load_specification_files(file_preamble)
 
 specification=struct;
