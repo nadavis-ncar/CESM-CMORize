@@ -3,6 +3,10 @@
 %Assumes lat/lon grid, single variable timeseries (convert SE/MPAS to gridded output first)
 %nadavis@ucar.edu
 
+clear all
+
+%c = parcluster('local');
+
 %Load user-supplied specification details 
 cmor_specification_file = 'cmor_specification.json'; 
 cmor_specification=json_load(cmor_specification_file);
@@ -17,11 +21,11 @@ output_specification_files=remove_entries(output_specification_files,specificati
 %Load CESM->MIP variable dictionary
 %Includes information for translating MIP requests for frequency, realm, etc.
 cesm_dictionary=json_load(cmor_specification.cmor_variable_dictionary);
-cesm_globals=json_load(['cesm_global_attributes_Amon.json']);
+cesm_globals=json_load(['cesm_global_attributes.json']);
 cesm_globals_names=fieldnames(cesm_globals);
 
 %Load/transform data, collect metadata, create output files, for each output spec
-for i=4%1:length(output_specification_files)
+for i=5   %1:length(output_specification_files)
 
    output_specification_file=[output_specification_files(i).folder,'/',output_specification_files(i).name];
    output_file=json_load(output_specification_file);
@@ -35,9 +39,10 @@ for i=4%1:length(output_specification_files)
    output_var_details=struct2cell(output_file.variable_entry);  
   
    version=['v',datestr(now,'yyyymmdd')];
+   tem=0;
 
    %Output file for each variable
-   for v=16:length(vars)
+   for v=1:length(vars)
       tic
       disp(vars{v})
 
@@ -60,7 +65,7 @@ for i=4%1:length(output_specification_files)
          variables.var{1}=variables_list;
          variables.operation=[];
          variables.eval=[];
-         variables.unit_change=[];
+         variables.option=[];
       else
          [variables]=translate_cesm_variable(variables_list);
       end
@@ -69,9 +74,34 @@ for i=4%1:length(output_specification_files)
       load_lev=0;
 
       %Grab global variables for the file
-      globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output,cmor_specification,specification,frequency,vars{v});
+      globals=global_attributes(specification.CV.CV.required_global_attributes,specification.CV.CV,output,cmor_specification,specification,frequency,vars{v},cesm_globals);
       globals=set_index_variables(globals,cmor_specification.cmor_case_name);
-    
+   
+      %For ambiguous variables
+      if ~isempty(variables.option)
+         for j=1:length(variables.option)
+            if contains(var_info{v}.comment,variables.option(j).string)
+               variables.var{1}=variables.option(j).name;
+            end
+         end
+      end
+ 
+      %Set TEM variable(s)
+      if isempty(variables.var) & strcmp(variables.operation,'TEM') & tem==0
+         disp('TEM variable requested, now calculating all TEM output variables')
+         variables.var{1}='Uzm';
+         variables.var{2}='Vzm';
+         variables.var{3}='Wzm';
+         variables.var{4}='VTHzm';
+         variables.var{5}='UVzm';
+         variables.var{6}='UWzm';
+         variables.var{7}='THzm'; 
+         tem=1;
+      end
+
+      %Either we're not outputting the variable or we've already done it (TEM)
+      if ~isempty(variables.var)
+
       %Load variable(s) 
       for vin=1:length(variables.var)
          var_files=dir([dir_input,'*.',variables.var{vin},'.*']);
@@ -102,18 +132,26 @@ for i=4%1:length(output_specification_files)
             dim{vin}{j}.out.name=dims{j};
             dim{vin}{j}.out.info=dimension_info(specification,dims{j},cesm_dictionary);
             dim{vin}{j}.interp_special='';
+            dim{vin}{j}.interp=[];
             
-            %Assimilate MIP lev info
+            %Assimilate MIP lev info for native output
             if strcmp(dim{vin}{j}.out.info,'lev')
                dim{vin}{j}.out.info=dimension_info(specification,'standard_hybrid_sigma',cesm_dictionary);
+            %Special vertical grid (e.g., discrete level)
             end
-            
+            if (strcmp('lev',dim{vin}{j}.native.name) | strcmp('ilev',dim{vin}{j}.native.name)) ...
+                   & sum(strcmp(fieldnames(specification.coordinate.axis_entry),dim{vin}{j}.out.name))>0
+               dim{vin}{j}=get_requested_axis_value(dim{vin}{j},specification.coordinate.axis_entry);
+            end     
+ 
             %do we need to interpolate the vertical grid?
             if strcmp(dim{vin}{j}.native.name,'lev')                
                lev_dim=j;
                load_lev=1;
                load_ps=1;
-               save_ps=1;
+               if isempty(dim{vin}{j}.interp)
+                  save_ps=1;
+               end
                if strcmp(dim{vin}{j}.out.name,'alevel')
                   dim{vin}{j}.out.name='lev';
                   dim{vin}{j}.interp='';
@@ -122,7 +160,6 @@ for i=4%1:length(output_specification_files)
                   dim{vin}{j}.interp='';
                end
                dim{vin}{j}.interp_special='vertical';
-               dim{vin}{j}.interp='';
             end
 
             %Add consistent time units
@@ -150,6 +187,9 @@ for i=4%1:length(output_specification_files)
  
          %Load variable
          var{vin}.native.value=ncread(file_name,variables.var{vin});
+         if strcmp(variables.operation,'TEM')
+            var{vin}.native.value=squeeze(var{vin}.native.value);
+         end
          var{vin}.native.name=variables.var{vin};
 
          %Load ps
@@ -162,7 +202,6 @@ for i=4%1:length(output_specification_files)
                   ps_out.info=vars_info{j};
                end
             end
-             
         end 
       end
 
@@ -188,8 +227,7 @@ for i=4%1:length(output_specification_files)
          var_out.native=var{1}.native;
       end
 
-      %Special operations - omega to wa, age of air, integrate, max value
-      %Need to calculate three based on ps-pres field
+      %Special operations - omega to w, age of air, integrate, max value
       if ~isempty(variables.operation)
          operation=variables.operation;
          switch operation
@@ -213,39 +251,48 @@ for i=4%1:length(output_specification_files)
             case 'omega_to_w'
                var_out.temp=var{2}.native.value;
                var_out=omega_to_w(var_out,ps_out.value,a,b);
+            case 'TEM'
+               var_out=calculate_tem(var_out);
          end
       end
 
       grid_label='gn';
 
+      if ~isempty(dim_native)
+         dim_num_shift=1;
+      else
+         dim_num_shift=0;
+      end
+
       %Do any interpolation
       for j=1:length(var_out.dim) 
-         if ~isempty(var_out.dim{j}.out.info.requested)
-            if strcmp(var_out.dim{j}.interp_special,'vertical')
-               var_out=interpolate_field(var_out.native.value,j,var_out.dim{j},a,b,ps);
+         if ~isempty(var_out.dim{j}.interp)
+            %Vertical interpolation on native levels, vs. on gridded dimensions
+            if strcmp(var_out.dim{j}.interp_special,'vertical') & load_ps==1
+               var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},str2num(output_file.Header.missing_value),a,b,ps_out.value);
             else
-               var_out=interpolate_field(var_out.native.value,j,var_out.dim{j});
-               grid_label='gr';
+               var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},str2num(output_file.Header.missing_value));
                if load_ps==1
-                  ps_out.value=interpolate_field(ps_out.value,j,var_out.dim{j});
+                  ps_out.value=interpolate_field(ps_out.value,j+dim_num_shift,var_out.dim{j});
                end
             end
-            var_out.dim{j}.out.value=dim{vin}{j}.interp;
+            var_out.dim{j}.out.value=var_out.dim{j}.interp;
          else
             var_out.dim{j}.out.value=ncread(file_name,var_out.dim{j}.native.name);
          end
       end
 
-      %Averaging, preserves singular dimensions
-      for j=1:length(dims)
-         for k=1:length(local_var_spec.averaging)
-            if strcmp(local_var_spec.averaging{k},dims{j}) && ~strcmp(local_var_spec.averaging{k},'time')
-               var_out.native.value=mean(var_out.native.value,j);
-               ps_out.value=mean(ps_out.value,j);
-               grid_label=cat(1,grid_label,'z');
-            end
+      %Averaging
+      for j=1:length(local_var_spec.averaging)
+         %Mask out when >50% of values along a dimension are missing values
+         if ~strcmp(local_var_spec.averaging{j},'time')
+            mask=squeeze(sum(var_out.native.value==str2num(output_file.Header.missing_value),j)>...
+                 0.5*size(var_out.native.value,j).*str2num(output_file.Header.missing_value));
+            var_out.native.value=squeeze(mean(var_out.native.value,j)).*mask;
+            ps_out.value=mean(ps_out.value,j);
+            grid_label=[grid_label,'z'];
          end
-      end 
+      end
 
       do_ab=0;
       %Bnd variables
@@ -272,42 +319,126 @@ for i=4%1:length(output_specification_files)
          var_out.dim{do_ab}.out.formula.b.info = get_formula_variable(specification.formula_terms.formula_entry,'b');
       end
 
+      %Set info for NetCDF
       var_out.info=output_var_details{v};
 
-      %Model name
+      %MIP-compatible model name
       for j=1:length(globals)
          if strcmp(globals(j).name,'source_id')
             id_index=j;
          end
       end
 
-      %Create directory
-      dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v},'/',grid_label,'/',version,'/'];
-      if ~exist(dir_output)
-         mkdir(dir_output)
-      end
-
-      %Output file name
-      outfile=[dir_output,vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
-              '_',cmor_specification.cmor_case_name,'_',grid_label,'_',cmor_specification.case_dates,'.nc'];
-
-      %Save to file
-      if save_ps==1
-         create_netcdf(var_out,outfile,globals,ps_out);
+      %Save to file      
+      if strcmp(variables.operation,'TEM')
+         tem_vars=struct2cell(var_out.tem);
+         for k=1:length(fieldnames(var_out.tem))
+            var_out.native.value=tem_vars{k};
+            var_out.info=output_var_details{find(strcmp(vars,tem_out{k},1,'first'))};
+            dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',tem_out{k},'/',grid_label,'/',version,'/'];
+            if ~exist(dir_output)
+               mkdir(dir_output)
+            end
+            outfile=[dir_output,tem_out{k},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
+           '_',cmor_specification.cmor_case_name,'_',grid_label,'_',cmor_specification.case_dates,'.nc'];
+            create_netcdf(var_out,outfile,globals);
+         end
       else
-         create_netcdf(var_out,outfile,globals);
+         dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v},'/',grid_label,'/',version,'/'];
+         if ~exist(dir_output)
+            mkdir(dir_output)
+         end
+         outfile=[dir_output,vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
+              '_',cmor_specification.cmor_case_name,'_',grid_label,'_',cmor_specification.case_dates,'.nc'];
+         if save_ps==1
+            create_netcdf(var_out,outfile,globals,ps_out);
+         else
+            create_netcdf(var_out,outfile,globals);
+         end
       end 
      
       clear variables dim dim_native var_out ps_out
      
       toc
+
+      end
    end
 end
+
+delete(gcp('nocreate'))
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %FUNCTIONS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function var_out=calculate_tem(var_out)
 
+g=9.81;
+a=6371e3;
+omega=7.292e-5;
+H=6800;
+
+lat=var_out.dim{1}.native.value;
+lev=var_out.dim{2}.native.value;
+time=var_out.dim{3}.native.value;
+
+lev=permute(repmat(lev(:),[1 length(lat) length(time)]),[2 1 3]);
+rho=(1.5/1e5)*lev;
+z=log(lev/1e5)*-H;
+lat=repmat(lat(:),[1 length(lev) length(time)]);
+f=2*omega*sind(lat);
+cosmat=cosd(lat);
+phi=deg2rad(lat);
+
+uzm=variables.var{1};
+vzm=variables.var{2};
+wzm=variables.var{3};
+vthzm=variables.var{4};
+uvzm=variables.var{5};
+uwzm=variables.var{6};
+thzm=variables.var{7};
+
+[dummy,dudz]=gradient(uzm,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
+[dudy,dummy]=gradient(uzm.*cosmat,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
+dudy=dudy.*(1./(a*cosmat));
+[dummy,dtheta_dz]=gradient(thzm,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
+
+var_out.tem.epfy=rho.*a.*cosmat.*(dudz.*vthzm./dtheta_dz-uvzm);
+var_out.tem.epfz=rho.*a.*cosmat.*((f-dudy).*vthzm./dtheta_dz-uwzm);
+
+[dFydy,dummy]=gradient(var_out.tem.epfy.*cosmat,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
+dFydy=dFydy.*(1./(a*cosmat));
+[dummy,dFzdz]=gradient(var_out.tem.epfz,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
+var_out.tem.utendepfd=(1./(rho.*a.*cosmat)).*(dFydy+dFzdz);
+
+%residual circulation
+[dummy,dTdz]=gradient(rho.*vthzm./dtheta_dz,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
+[dTdy,dummy]=gradient(cosmat.*vthzm./dtheta_dz,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
+var_out.tem.vtem=vzm-(dTdz./rho);
+var_out.tem.wtem=wzm+(1./(a*cosmat)).*dTdy;
+
+var_out.tem.epfy=var_out.tem.epfy./rho;
+var_out.tem.epfz=var_out.tem.epfz./rho;
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Get requested axis values or single value
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function dim=get_requested_axis_value(dim,axis_entries)
+
+axes=struct2cell(axis_entries);
+axes_entry=find(strcmp(fieldnames(axis_entries),dim.out.name),1,'first');
+if ~isempty(axes{axes_entry}.requested)
+   requested=axes{axes_entry}.requested;
+   for i=1:length(requested)
+      dim.interp(i)=str2double(requested{i});
+   end
+   dim.interp=dim.interp(:);
+elseif ~isempty(axes{axes_entry}.value)
+   dim.interp=str2double(axes{axes_entry}.value);
+else
+   error('No value found for axis requesting specified values')
+end
+end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Expand surface pressure to full pressure field with hybrid coefficients
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -332,7 +463,7 @@ if strcmp(conversion,'number_density_to_molar_mixing_ratio')
 
    data.native.value=(100^3)*data.native.value./n_air;
 elseif strcmp(conversion,'molar_mixing_ratio_to_DU')
-   data.native.value=data.native.value*(48/29)*(287*273.15/1e5);
+   data.native.value=data.native.value*(287*273.15/1e5);
 end
 
 end
@@ -707,7 +838,12 @@ else
          end
       end
    else
-      error('Unable to construct bnds variable - no valid min/max in mip spec and no interface field')
+      for j=2:size(bnds,2)-1
+         bnds(1,j)=dim(j)-(dim(j)-dim(j-1))/2;
+         bnds(2,j)=dim(j)+(dim(j+1)-dim(j))/2;
+      end
+      bnds(:,1)=[-(dim(2)-dim(1))/2 (dim(2)-dim(1))/2]+dim(1);
+      bnds(:,end)=[-(dim(end)-dim(end-1))/2 (dim(end)-dim(end-1))/2]+dim(end);
    end
 end
 
@@ -715,72 +851,58 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Interpolates along specified dimension
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function field_out=interpolate_field(field,interp_dim,dim,varargin)
+function field_out=interpolate_field(field,interp_dim,dim,missing_value,varargin)
+
+do_native=0;
+squeeze_field=0;
 
 %Optional: load in surface pressure, a/b's for vertical interp, generate pressure array
-if nargin>3
+if nargin>4
    a=varargin{1};
    b=varargin{2};
    ps=varargin{3};
 
-   pres=calculate_pressure(ps,a,b);
-
-   dim.native.value=a+ps.*b;
-   dim_reshape=1;
-else
-   dim_reshape=0;
+   dim.native.value=calculate_pressure(ps,a,b);
+   do_native=1;
 end
+%Set up output field
+field_size=size(field);
+field_size(interp_dim)=length(dim.interp);
+field_out=zeros(field_size);
 
-dimsizes=size(field);
-dims=1:length(dimsizes);
-
-%Reshape field to have j on right, arbitrary 4D array
-dims_reshaped=dims;
-dims_reshaped(interp_dim)=[];
-field=permute(field,[dims_reshaped interp_dim]);
-rank_permute=length(size(field));
-
-%We need to reshape so the pressure array matches
-if dim_reshape==1
-   dim.native.value=permute(dim.native.value,[dims_reshaped interp_dim]);
+if do_native==1
+   local_field_out=zeros(size(field_out,4),size(field_out,3));
 end
-dimsizes=permute(dimsizes,[dims_reshaped interp_dim]);
-
-%Set up interpolant
-dimsizes(end)=length(dim.out.info.requested);
-field_out=zeros(dimsizes);
-
-%Expand to arbirary rank with interp on right
-field=expand_field(field);
 
 %Interpolate
+disp('Interpolating')
 for i=1:size(field,1)
+   disp([sprintf('%0.2f',100*i/size(field,1)),'% complete'])
    for j=1:size(field,2)
-      parfor k=1:size(field,3)
-         if dim_reshape==1
-            field_out(i,j,k,:)=interp1(squeeze(dim.native.value(i,j,k,:)),...
-                                  squeeze(field(i,j,k,:)),dim.out.info.requested);
-         else
+      if do_native==1
+         local_field=squeeze(field(i,j,:,:))';
+         local_dim=squeeze(dim.native.value(i,j,:,:))';
+         for k=1:size(local_dim,1)
+           local_field_out(k,:)=interp1(local_dim(k,:),local_field(k,:),...
+                                  dim.interp,'linear',missing_value);
+         end
+         field_out(i,j,:,:)=local_field_out';
+     else
+         for k=1:size(field,3)
             field_out(i,j,k,:)=interp1(dim.native.value,...
-                                  squeeze(field(i,j,k,:)),dim.out.info.requested);
+                                  squeeze(field(i,j,k,:)),dim.interp,...
+                                  'linear',missing_value);
          end
       end
    end
 end
 
-%Collapse any extra singular dimensions, ensure any preexisting singular remains
-field_out=collapse_field(field_out);
 
-%Reshape field back to original order
-j_index=length(size(field_out));
-if interp_dim==1
-   dims_reshaped=[j_index 1:j_index-1];
-elseif interp_dim==j_index
-   dims_reshaped=[1:j_index];
-else
-   dims_reshaped=[1:interp_dim-1 j_index interp_dim:j_index-1];
+%Collapse back to 3D
+if squeeze_field==1
+   field_out=squeeze(field_out);
 end
-field_out=permute(field_out,dims_reshaped); 
+delete(gcp('nocreate'))
 
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -877,17 +999,24 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function [variable_out]=translate_cesm_variable(in)
 
+opt_count=1;
 in_components=fieldnames(in);
-variables_components={'var';'operation';'eval';'p0';'lat0';'axis'};
-variable_out=struct('var',strings(0),'operation',strings(0),'eval',strings(0),'p0',[],'lat0',[],'axis',strings(0));
+variables_components={'var';'operation';'eval';'p0';'lat0';'axis';'option'};
+variable_out=struct('var',strings(0),'operation',strings(0),'eval',strings(0),'p0',[],'lat0',[],'axis',strings(0),'option',[]);
 
 for i=1:length(in_components)
-   for j=1:length(variables_components)
-      if contains(in_components{i}, variables_components{j})
+   for j=1:length(variables_components)-1
+      if contains(in_components{i}, variables_components{j}) 
          eval(['variable_out.',variables_components{j},'=cat(1,variable_out.',variables_components{j},',in.',in_components{i},');']) 
       end
    end
+   if contains(in_components{i}, 'option')
+      variable_out.option(opt_count)=struct('var',in_components{i}.var,'string',in_components{i}.string);
+      opt_count=opt_count+1;
+   end 
 end
+
+
 
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -906,10 +1035,9 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Gather required global attributes
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function globals=global_attributes(required_attributes,CV_file,output,cmor_specification,specification,frequency,var)
+function globals=global_attributes(required_attributes,CV_file,output,cmor_specification,specification,frequency,var,cesm_globals)
    
 globals=struct;
-cesm_globals=json_load(['cesm_global_attributes_',output,'.json']);
 cesm_globals_name=fieldnames(cesm_globals);
 cesm_globals=struct2cell(cesm_globals);
 mip_globals_name=fieldnames(CV_file);
