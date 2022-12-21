@@ -26,7 +26,9 @@
    "source_id" : "CESM2_WACCM",
    "source_type" : "AGCM-CHEM",
    "sub_experiment" : "none",
-   "table_id" : "Amon",
+   "table_id" : {  
+      "eval" : "ouput"
+   },
    "tracking_id" : {
       "eval" : "[dec2hex(randi(RandStream('dsfmt19937','Seed','shuffle'),[1e12 1e13-1])),'-',dec2hex(randi(RandStream('dsfmt19937','Seed','shuffle'),[1e10 1e11-1]))]"
    },
