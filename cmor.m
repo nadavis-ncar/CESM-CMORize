@@ -5,8 +5,6 @@
 
 clear all
 
-%c = parcluster('local');
-
 %Load user-supplied specification details 
 cmor_specification_file = 'cmor_specification.json'; 
 cmor_specification=json_load(cmor_specification_file);
@@ -258,6 +256,7 @@ for i=5   %1:length(output_specification_files)
 
       grid_label='gn';
 
+      %Need to generalize to all cases
       if ~isempty(dim_native)
          dim_num_shift=1;
       else
@@ -269,9 +268,9 @@ for i=5   %1:length(output_specification_files)
          if ~isempty(var_out.dim{j}.interp)
             %Vertical interpolation on native levels, vs. on gridded dimensions
             if strcmp(var_out.dim{j}.interp_special,'vertical') & load_ps==1
-               var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},str2num(output_file.Header.missing_value),a,b,ps_out.value);
+               var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN,a,b,ps_out.value);
             else
-               var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},str2num(output_file.Header.missing_value));
+               var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN);
                if load_ps==1
                   ps_out.value=interpolate_field(ps_out.value,j+dim_num_shift,var_out.dim{j});
                end
@@ -286,13 +285,17 @@ for i=5   %1:length(output_specification_files)
       for j=1:length(local_var_spec.averaging)
          %Mask out when >50% of values along a dimension are missing values
          if ~strcmp(local_var_spec.averaging{j},'time')
-            mask=squeeze(sum(var_out.native.value==str2num(output_file.Header.missing_value),j)>...
-                 0.5*size(var_out.native.value,j).*str2num(output_file.Header.missing_value));
-            var_out.native.value=squeeze(mean(var_out.native.value,j)).*mask;
+            mask=(squeeze(sum(isnan(var_out.native.value),j))>0.5*size(var_out.native.value,j));
+            var_out.native.value=squeeze(mean(var_out.native.value,j,'omitnan'));
+            var_out.native.value(mask)=str2num(output_file.Header.missing_value);
             ps_out.value=mean(ps_out.value,j);
             grid_label=[grid_label,'z'];
          end
       end
+  
+      var_out.native.value(isnan(var_out.native.value))=str2num(output_file.Header.missing_value);
+ 
+      var_out=stored_direction(var_out);   
 
       do_ab=0;
       %Bnd variables
@@ -317,7 +320,14 @@ for i=5   %1:length(output_specification_files)
          var_out.dim{do_ab}.out.formula.a.info = get_formula_variable(specification.formula_terms.formula_entry,'a');
          var_out.dim{do_ab}.out.formula.b.value=b;
          var_out.dim{do_ab}.out.formula.b.info = get_formula_variable(specification.formula_terms.formula_entry,'b');
+         if var_out.fim{do_ab}.flip==1
+            var_out.dim{do_ab}.out.formula.a_bnds.value=flip(var_out.dim{do_ab}.out.formula.a_bnds.value,2);
+            var_out.dim{do_ab}.out.formula.b_bnds.value=flip(var_out.dim{do_ab}.out.formula.b_bnds.value,2);
+            var_out.dim{do_ab}.out.formula.a.value=flip(var_out.dim{do_ab}.out.formula.a.value,1);
+            var_out.dim{do_ab}.out.formula.b.value=flip(var_out.dim{do_ab}.out.formula.b.value,1);
+         end
       end
+      
 
       %Set info for NetCDF
       var_out.info=output_var_details{v};
@@ -328,6 +338,8 @@ for i=5   %1:length(output_specification_files)
             id_index=j;
          end
       end
+
+      %Enforce stored direction attribute
 
       %Save to file      
       if strcmp(variables.operation,'TEM')
@@ -360,7 +372,6 @@ for i=5   %1:length(output_specification_files)
       clear variables dim dim_native var_out ps_out
      
       toc
-
       end
    end
 end
@@ -369,6 +380,37 @@ delete(gcp('nocreate'))
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %FUNCTIONS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Enforces dimension rules
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function var_out=stored_direction(var_out)
+
+for i=1:length(var_out.dim)
+   flip_dim=0;
+   dim_increasing=(var_out.dim{i}.out.value(2)-var_out.dim{i}.out.value(1))>0;
+   if dim_increasing==1
+      if strcmp(var_out.dim{i}.out.info.stored_direction,'decreasing')
+         flip_dim=1;
+      end
+   else
+      if strcmp(var_out.dim{i}.out.info.stored_direction,'increasing')
+         flip_dim=1;
+      end
+   end
+   if flip_dim==1
+      var_out.native.value=flip(var_out.native.value,i);
+      var_out.dim{i}.out.value=flip(var_out.dim{i}.out.value,i);
+      var_out.dim{i}.flip=1;
+   else
+      var_out.dim{i}.flip=0;
+   end
+end
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Calculates TEM output
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function var_out=calculate_tem(var_out)
 
@@ -721,12 +763,11 @@ for i=1:length(var_out.dim)
    attnames=fieldnames(var_out.dim{i}.out.info);
    atts=struct2cell(var_out.dim{i}.out.info);
    for j=1:length(atts)
-       if ~isempty(atts{j}) & sum(strcmp(attnames{j},{'out_name';'must_have_bounds';'stored_direction';'type'}))==0
+       if ~isempty(atts{j}) & sum(strcmp(attnames{j},{'out_name';'must_have_bounds';'stored_direction';'type';'requested'}))==0
           netcdf.putAtt(ncid,var_dim(i),attnames{j},atts{j});
           netcdf.putAtt(ncid,var_dim_bnds(i),attnames{j},atts{j}); 
        end
    end   
-
 end
 
 netcdf.endDef(ncid);
@@ -882,7 +923,7 @@ for i=1:size(field,1)
       if do_native==1
          local_field=squeeze(field(i,j,:,:))';
          local_dim=squeeze(dim.native.value(i,j,:,:))';
-         for k=1:size(local_dim,1)
+         parfor k=1:size(local_dim,1)
            local_field_out(k,:)=interp1(local_dim(k,:),local_field(k,:),...
                                   dim.interp,'linear',missing_value);
          end
