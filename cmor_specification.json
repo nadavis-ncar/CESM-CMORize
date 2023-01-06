@@ -6,5 +6,5 @@
     "cmor_specification_dir": "/glade/scratch/nadavis/CCMI/CCMI-2022/Tables/",
     "cmor_variable_dictionary" : "cesm_variable_dictionary.json",
     "cmor_case_name" : "r1i1p1f1",
-    "cmor_experiment" : "refD1"
+    "cmor_experiment" : "refD1",
 }
