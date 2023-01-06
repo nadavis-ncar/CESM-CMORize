@@ -1,53 +1,118 @@
 {
   "Variables" : {
+    "br" : "BR",
+    "brcl" : "BRCL",
+    "bro" : "BRO",
+    "brono2" : "BRONO2",
+    "bry" : "BRY",
+    "c2br2f4" : "",
+    "chbr2cl" : "",
+    "chbrcl2" : "",
+    "ch2brcl" : "",
     "c2h2" : "C2H2",
     "c2h6" : "C2H6",
+    "chbr3" : "CHBR3",
+    "ch2br2" : "CH2BR2",
+    "ch3br" : "CH3BR",
+    "cbrf3" : "CF3BR",
+    "cbrclf2" : "CF2CLBR",
+    "ccl4" : "CCL4",
+    "cf2cl2" : "CFC12",
+    "cfcl3" : "CFC11",
+    "chclf2" : "HCFC22",
+    "ch3ccl2f" : "HCFC141B",
+    "ch3cclf2" : "HCFC142B",
+    "ch3cl" : "CH3CL",
+    "ch3ccl3" : "CH3CCL3",
+    "ch3ooh" : "CH3OOH",
     "ch4" : "CH4",
     "clc" : "CONCLD",
-    "cl" : "CLOUD",
+    "cl" : {
+       "option" : {
+          "var" : "CLOUD",
+          "string" : "cloud"
+          },
+       "option" : {
+          "var" : "CL",
+          "string" : "chlorine"
+          }
+       },
+    "clo" : "CLO",
+    "cl2o2" : "CL2O2",
+    "clono2" : "CLONO2",
     "cltc" : {
        "var1" : "CONCLD",
        "operation" : "max_value",
        "axis" : "lev"
        },
     "clt" : "CLDTOT",
+    "cly" : "CLY",
     "co" : "CO",
-    "co2" : "CO2",  
+    "co2" : "CO2",
+    "cos" : "",  
     "cod" : {
        "var1": "TOT_CLD_VISTAU",
-       "operation" : "integrate",
+       "operation" : "sum",
        "axis" : "lev"
-       }, 
+       },
+    "epfz" : {
+       "operation" : "TEM"
+    },
+    "epfy" : {
+       "operation" : "TEM"
+    },
+    "h2" : "H2", 
     "h2o" : {
        "var1" : "Q",
        "var2" : "CLDICE",
        "var3" : "CLDLIQ",
        "eval" : "(var{1}.native.value+var{2}.native.value+var{3}.native.value)*(18./28.97e-3)"
        },
+    "h2o2" : "H2O2",
+    "hbr" : "HBR",
     "hcl" : "HCL",
     "hcn" : "HCN",
     "hfls" : "LHFLX",
     "hfss" : "SHFLX",
+    "hno4" : "HNO4",
+    "hno3" : "HNO3",
+    "hocl" : "HOCL",
+    "ho2" : "HO2",
+    "hobr" : "HOBR",
     "meanage" : {
         "var1" : "AOA1",
         "operation" : "age_of_air",
-        "lat0" : "0.5",
-        "p0" : "100"
+        "lat0" : 0.5,
+        "p0" : 100.0
         },
     "mcu" : "ZMMU",
+    "n" : "N",
     "no" : "NO",
+    "nogwfluxw" : "",
+    "nogwfluxe" : "",
     "no2" : "NO2",       
+    "noy" : "NOY",
+    "n2o" : "N2O",
+    "n2o5" : "N2O5",
     "pr" : {
         "var1" : "PRECT",
-        "eval" : "1000*var{1}.native.value",
-        "change_units" : "kg m-2 s-1"
+        "eval" : "1000*var{1}.native.value"
         },
     "ps" : "PS",
     "ptp" : "TROP_P",
     "o3" : "O3",
     "o3strat" : "O3S",
     "o3stratdep" : "DF_O3S",
-    "o3stratloss" : "O3S_Loss",
+    "o3stratloss" : {
+       "var1" : "O3S_Loss",
+       "var2" : "T",
+       "operation" : "burden"
+       },
+    "oclo" : "OCLO",
+    "ogwemflux" : {
+       "var1" : "UTGWORO",
+       "operation" : "gw_flux"
+       },
     "oh" : "OH",
     "rlut" : "FLUT",
     "rsut" : {
@@ -55,24 +120,63 @@
         "var2" : "FSNTOA",
         "eval" : "var{1}.native.value-var{2}.native.value"
         },
+    "sadsulf" : {
+        "var1" : "SAD_SULFC",
+        "eval" : "var{1}.native.value*100"
+        },
+    "sadnat" : {
+        "var1" : "SAD_LNAT",
+        "eval" : "var{1}.native.value*100"
+        },
+    "sadice" : {
+        "var1" : "SAD_ICE",
+        "eval" : "var{1}.native.value*100"
+        },
     "siconca" : "ICEFRAC",
+    "so2" : "SO2",
     "tatp" : "TROP_T",
     "toz" : {
-        "var1" : "TMO3",
-        "eval" : "var{1}.native.value*2.1315e-5"
+        "var1" : "O3",
+        "operation" : "ozone_integral"
         },
-    "tropoz" : "TOZ",
+    "tropoz" : {
+        "var1" : "O3",
+        "var2" : "TROP_P",
+        "operation" : "ozone_integral"
+        },
     "ta" : "T",
     "tntrl" : "QRL",
     "tntrs" : "QRS",
     "ts" : "TS",
     "ua" : "U",
+    "utendepfd" : {
+       "operation" : "TEM"
+       },
+    "utendgw" : {
+       "var1" : "UTGWSPEC",
+       "var2" : "BUTGWSPEC",
+       "var3" : "UTGWORO",
+       "eval" : "var{1}.native.value+var{2}.native.value+var{3}.native.value"
+       },
+    "utendnogw" : {
+       "var1" : "UTGWSPEC",
+       "var2" : "BUTGWSPEC",
+       "eval" : "var{1}.native.value+var{2}.native.value"
+       },
+    "utendogw" : "UTGWORO",
     "va" : "V",
+    "vt" : "VTHzm", 
+    "vtem" : {
+       "operation" : "TEM"
+       },
     "wa" : {
         "var1" : "OMEGA",
         "var2" : "T",
         "operation" : "omega_to_w"
         },
+    "wtem" : {
+       "operation" : "TEM"
+       },
     "zg" : "Z3",
     "ztp" : "TROP_Z"
   },
@@ -89,9 +193,10 @@
     "latitude" : "lat",
     "longitude" : "lon",
     "time" : "time",
-    "alevel" : "lev", 
+    "plev" : "lev",
+    "alevel" : "lev",
+    "alevhalf" : "lev", 
     "plev39" : "lev"
   }
-
 
 }
