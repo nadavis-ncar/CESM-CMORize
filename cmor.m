@@ -40,7 +40,7 @@ for i=5
    tem=0;
 
    %Output file for each variable
-   for v=45:length(vars)
+   for v=69:length(vars)
       tic
       disp(vars{v})
 
@@ -75,7 +75,7 @@ for i=5
       globals=set_index_variables(globals,cmor_specification.cmor_case_name);
    
       %For ambiguous variables where there are two or more supplied output options
-      if ~isempty(variables.option)
+      if strcmp(fieldnames(variables),'option')
          for j=1:length(variables.option)
             if contains(local_var_spec.comment,variables.option(j).string)
                variables.var{1}=variables.option(j).var;
@@ -259,10 +259,16 @@ for i=5
             else
                var_out.native=var{1}.native;
             end
+ 
+            if strcmp(variables.operation,'TEM')
+               for j=1:length(variables.var)
+                  var_out.var{j}=var{j}.native.value;
+               end
+            end
 
-            for i=1:length(dim_native_names_list)
-               var_out.native_dim(i).name=dim_native_names_list{i};
-               var_out.native_dim(i).value=dim_native_values{i};
+            for j=1:length(dim_native_names_list)
+               var_out.native_dim(j).name=dim_native_names_list{j};
+               var_out.native_dim(j).value=dim_native_values{j};
             end
 
             %Special operations
@@ -327,9 +333,16 @@ for i=5
                   if strcmp(var_out.dim{j}.interp_special,'vertical') & load_ps==1
                      var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN,a,b,ps_out.value);
                   else
-                     var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN);
-                     if load_ps==1
-                        ps_out.value=interpolate_field(ps_out.value,j+dim_num_shift,var_out.dim{j});
+                     if strcmp(variables.operation,'TEM')
+                        tem_output_vars=fieldnames(var_out.tem);
+                        for k=1:length(tem_output_vars)
+                           eval(['var_out.tem.',tem_output_vars{k},'=interpolate_field(var_out.tem.',tem_output_vars{k},',j+dim_num_shift,var_out.dim{j},NaN);']);
+                        end
+                     else
+                        var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN);
+                        if load_ps==1
+                           ps_out.value=interpolate_field(ps_out.value,j+dim_num_shift,var_out.dim{j});
+                        end
                      end
                   end
                   var_out.dim{j}.out.value=var_out.dim{j}.interp;
@@ -404,15 +417,17 @@ for i=5
             if strcmp(variables.operation,'TEM')
                tem_vars=struct2cell(var_out.tem);
                for k=1:length(fieldnames(var_out.tem))
-                  var_out.native.value=tem_vars{k};
-                  var_out.info=output_var_details{find(strcmp(vars,tem_out{k},1,'first'))};
-                  dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',tem_out{k},'/',grid_label,'/',version,'/'];
+                  var_out.native.value=eval(['var_out.tem.',tem_output_vars{k},';']);;
+                  var_out.info=output_var_details{find(strcmp(vars,tem_output_vars{k}),1,'first')};
+                  dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',tem_output_vars{k},'/',grid_label,'/',version,'/'];
                   if ~exist(dir_output)
                      mkdir(dir_output)
                   end
-                 outfile=[dir_output,tem_out{k},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
+                  var_out.native.value(isinf(var_out.native.value))=str2num(output_file.Header.missing_value);
+                  var_out.native.value(isnan(var_out.native.value))=str2num(output_file.Header.missing_value);
+                  outfile=[dir_output,tem_output_vars{k},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
                           '_',cmor_specification.cmor_case_name,'_',grid_label,'_',file_name(end-15:end-3),'.nc'];
-                 create_netcdf(var_out,outfile,globals);
+                  create_netcdf(var_out,outfile,globals);
                end
             else
                dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v},'/',grid_label,'/',version,'/'];
@@ -429,10 +444,10 @@ for i=5
             end 
 
 
-	     		%Remove files from list 
-		      for j=1:length(file_list)
-		      	file_list{j}(1)=[];
-		      end     
+	    %Remove files from list 
+	    for j=1:length(file_list)
+	       file_list{j}(1)=[];
+            end     
       
             clear dim dim_native var_out ps_out
      
@@ -493,43 +508,51 @@ lat=var_out.dim{1}.native.value;
 lev=var_out.dim{2}.native.value;
 time=var_out.dim{3}.native.value;
 
-lev=permute(repmat(lev(:),[1 length(lat) length(time)]),[2 1 3]);
+lev=repmat(lev(:)',[length(lat) 1]);
 rho=(1.5/1e5)*lev;
 z=log(lev/1e5)*-H;
-lat=repmat(lat(:),[1 length(lev) length(time)]);
+lat=repmat(lat(:),[1 size(lev,2)]);
 f=2*omega*sind(lat);
 cosmat=cosd(lat);
 phi=deg2rad(lat);
 
-uzm=variables.var{1};
-vzm=variables.var{2};
-wzm=variables.var{3};
-vthzm=variables.var{4};
-uvzm=variables.var{5};
-uwzm=variables.var{6};
-thzm=variables.var{7};
+uzm=var_out.var{1};
+vzm=var_out.var{2};
+wzm=var_out.var{3};
+vthzm=var_out.var{4};
+uvzm=var_out.var{5};
+uwzm=var_out.var{6};
+thzm=var_out.var{7};
 
-[dummy,dudz]=gradient(uzm,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
-[dudy,dummy]=gradient(uzm.*cosmat,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
-dudy=dudy.*(1./(a*cosmat));
-[dummy,dtheta_dz]=gradient(thzm,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
+var_out.tem.utendepfd=zeros(size(uzm));
+var_out.tem.vtem=zeros(size(uzm));
+var_out.tem.wtem=zeros(size(uzm));
+var_out.tem.epfy=zeros(size(uzm));
+var_out.tem.epfz=zeros(size(uzm));
 
-var_out.tem.epfy=rho.*a.*cosmat.*(dudz.*vthzm./dtheta_dz-uvzm);
-var_out.tem.epfz=rho.*a.*cosmat.*((f-dudy).*vthzm./dtheta_dz-uwzm);
+for t=1:length(time)
+   [dudz,dummy]=gradient(squeeze(uzm(:,:,t)),squeeze(z(1,:,1)),squeeze(phi(:,1,1)));
+   [dummy,dudy]=gradient(squeeze(uzm(:,:,t)).*cosmat,squeeze(z(1,:,1)),squeeze(phi(:,1,1)));
+   dudy=dudy.*(1./(a*cosmat));
+   [dtheta_dz,dummy]=gradient(squeeze(thzm(:,:,t)),squeeze(z(1,:,1)),squeeze(phi(:,1,1)));
 
-[dFydy,dummy]=gradient(var_out.tem.epfy.*cosmat,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
-dFydy=dFydy.*(1./(a*cosmat));
-[dummy,dFzdz]=gradient(var_out.tem.epfz,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
-var_out.tem.utendepfd=(1./(rho.*a.*cosmat)).*(dFydy+dFzdz);
+   var_out.tem.epfy(:,:,t)=rho.*a.*cosmat.*(dudz.*squeeze(vthzm(:,:,t))./dtheta_dz-squeeze(uvzm(:,:,t)));
+   var_out.tem.epfz(:,:,t)=rho.*a.*cosmat.*((f-dudy).*squeeze(vthzm(:,:,t))./dtheta_dz-squeeze(uwzm(:,:,t)));
 
-%residual circulation
-[dummy,dTdz]=gradient(rho.*vthzm./dtheta_dz,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
-[dTdy,dummy]=gradient(cosmat.*vthzm./dtheta_dz,squeeze(phi(:,1,1)),squeeze(z(1,:,1)));
-var_out.tem.vtem=vzm-(dTdz./rho);
-var_out.tem.wtem=wzm+(1./(a*cosmat)).*dTdy;
+   [dummy,dFydy]=gradient(squeeze(var_out.tem.epfy(:,:,t)).*cosmat,squeeze(z(1,:,1)),squeeze(phi(:,1,1)));
+   dFydy=dFydy.*(1./(a*cosmat));
+   [dFzdz,dummy]=gradient(squeeze(var_out.tem.epfz(:,:,t)),squeeze(z(1,:,1)),squeeze(phi(:,1,1)));
+   var_out.tem.utendepfd(:,:,t)=(1./(rho.*a.*cosmat)).*(dFydy+dFzdz);
 
-var_out.tem.epfy=var_out.tem.epfy./rho;
-var_out.tem.epfz=var_out.tem.epfz./rho;
+   %residual circulation
+   [dTdz,dummy]=gradient(rho.*squeeze(vthzm(:,:,t))./dtheta_dz,squeeze(z(1,:,1)),squeeze(phi(:,1,1)));
+   [dummy,dTdy]=gradient(cosmat.*squeeze(vthzm(:,:,t))./dtheta_dz,squeeze(z(1,:,1)),squeeze(phi(:,1,1)));
+   var_out.tem.vtem(:,:,t)=squeeze(vzm(:,:,t))-(dTdz./rho);
+   var_out.tem.wtem(:,:,t)=squeeze(wzm(:,:,t))+(1./(a*cosmat)).*dTdy;
+
+   var_out.tem.epfy(:,:,t)=var_out.tem.epfy(:,:,t)./rho;
+   var_out.tem.epfz(:,:,t)=var_out.tem.epfz(:,:,t)./rho;
+end
 
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -991,11 +1014,17 @@ if do_native==1
    local_field_out=zeros(size(field_out,4),size(field_out,3));
 end
 
+if interp_dim==2
+   loop_num=3;
+else
+   loop_num=2;
+end
+
 %Interpolate
 disp('Interpolating')
 for i=1:size(field,1)
    disp([sprintf('%0.2f',100*i/size(field,1)),'% complete'])
-   for j=1:size(field,2)
+   for j=1:size(field,loop_num)
       if do_native==1
          local_field=squeeze(field(i,j,:,:))';
          local_dim=squeeze(dim.native.value(i,j,:,:))';
@@ -1012,8 +1041,8 @@ for i=1:size(field,1)
                                   squeeze(field(i,j,:)),dim.interp,...
                                   'linear',missing_value);
             case 3
-               field_out(i,j,:)=interp1(dim.native.value,...
-                                  squeeze(field(i,j,:)),dim.interp,...
+               field_out(i,:,j)=interp1(dim.native.value,...
+                                  squeeze(field(i,:,j)),dim.interp,...
                                   'linear',missing_value);
             case 4
                for k=1:size(field_out,3)
