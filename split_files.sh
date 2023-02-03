@@ -1,3 +1,6 @@
+#Splits single variable timeseries into one file per year 
+#Can be linked to/absorbed into cmor.m through system commands
+
 set -e
 
 module load nco
@@ -5,7 +8,6 @@ declare -a vars=("CLDTOT" "FLUT" "FSDS" "FSDSC" \
                  "PS" "T" "TREFHT" "TREFHTMX" \  
                  "TREFHTMN" "U" "V" "Z3")
 
-#Splits single variable timeseries into one file per year 
 for i in "${vars[@]}"; do
 
    echo "$i"
