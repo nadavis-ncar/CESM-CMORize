@@ -23,7 +23,7 @@ cesm_globals=json_load(['cesm_global_attributes.json']);
 cesm_globals_names=fieldnames(cesm_globals);
 
 %Load/transform data, collect metadata, create output files, for each output spec
-for i=5   
+for i=5 
 
    output_specification_file=[output_specification_files(i).folder,'/',output_specification_files(i).name];
    output_file=json_load(output_specification_file);
@@ -36,11 +36,13 @@ for i=5
 
    output_var_details=struct2cell(output_file.variable_entry);  
   
-   version=['v',datestr(now,'yyyymmdd')];
+   %version=['v',datestr(now,'yyyymmdd')];
+   version=['v20230207'];
    tem=0;
+   var_last=[];
 
    %Output file for each variable
-   for v=69:length(vars)
+   for v=1:length(vars)
       tic
       disp(vars{v})
 
@@ -171,6 +173,7 @@ for i=5
                   if (strcmp('lev',dim{vin}{j}.native.name) | strcmp('ilev',dim{vin}{j}.native.name)) ...
                    & sum(strcmp(fieldnames(specification.coordinate.axis_entry),dim{vin}{j}.out.name))>0
                      dim{vin}{j}=get_requested_axis_value(dim{vin}{j},specification.coordinate.axis_entry);
+                     dim{vin}{j}.interp_special='vertical';
                   end     
  
                   if strcmp(dim{vin}{j}.native.name,'ilev') | strcmp(dim{vin}{j}.native.name,'lev')
@@ -192,7 +195,6 @@ for i=5
                         dim{vin}{j}.out.name='lev';
                         dim{vin}{j}.interp='';
                      end
-                     dim{vin}{j}.interp_special='vertical';
                   end
 
                   %Add consistent time units
@@ -219,7 +221,9 @@ for i=5
                end
  
                %Load variable
-               var{vin}.native.value=ncread(file_name,variables.var{vin});
+               if ~strcmp(var_last,variables.var{vin})
+                  var{vin}.native.value=ncread(file_name,variables.var{vin});
+               end
                if strcmp(variables.operation,'TEM') | ~isempty(remove_list) 
                   var{vin}.native.value=squeeze(var{vin}.native.value);
                end
@@ -235,9 +239,12 @@ for i=5
                         ps_out.info=vars_info{j};
                      end
                   end
-               end 
+               end
+
+               var_last=variables.var{vin}; 
             end
 
+            disp('Processing')
             %Inherit dimensions of input var
             var_out.dim=dim{1};
 
@@ -320,9 +327,13 @@ for i=5
                   end
                end
             end
-      
+
             %Only attempt reordering if necessary - typically for single pressure-level output
-            if length(permute_order) == length(size(var_out.native.value))    
+            if length(permute_order) == length(size(var_out.native.value))
+               if max(permute_order) > length(size(var_out.native.value))
+                  [val,loc]=max(permute_order);
+                  permute_order(loc)=permute_order(loc)-1;
+               end
                var_out.native.value=permute(var_out.native.value,permute_order);
             end
 
@@ -350,7 +361,7 @@ for i=5
                   var_out.dim{j}.out.value=ncread(file_name,var_out.dim{j}.native.name);
                end
             end
-
+ 
             %Averaging
             for j=1:length(local_var_spec.averaging)
                if ~strcmp(local_var_spec.averaging{j},'time') & strcmp(local_var_spec.averaging{j},'longitude') & length(remove_list)==0
@@ -389,7 +400,7 @@ for i=5
                var_out.dim{do_ab}.out.formula.a.info = get_formula_variable(specification.formula_terms.formula_entry,'a');
                var_out.dim{do_ab}.out.formula.b.value=b;
                var_out.dim{do_ab}.out.formula.b.info = get_formula_variable(specification.formula_terms.formula_entry,'b');
-               if var_out.fim{do_ab}.flip==1
+               if var_out.dim{do_ab}.flip==1
                   var_out.dim{do_ab}.out.formula.a_bnds.value=flip(var_out.dim{do_ab}.out.formula.a_bnds.value,2);
                   var_out.dim{do_ab}.out.formula.b_bnds.value=flip(var_out.dim{do_ab}.out.formula.b_bnds.value,2);
                   var_out.dim{do_ab}.out.formula.a.value=flip(var_out.dim{do_ab}.out.formula.a.value,1);
@@ -443,23 +454,19 @@ for i=5
                end
             end 
 
-
 	    %Remove files from list 
-	    for j=1:length(file_list)
-	       file_list{j}(1)=[];
-            end     
-      
-            clear dim dim_native var_out ps_out
+            for k=1:length(variables.var)
+               file_list{k}(1)=[];
+            end
+            clear dim dim_native var_out ps_out dim_out
      
             toc
          end
 
-         clear variables_list variable
+         clear variables_list variable file_list 
       end
    end
 end
-
-delete(gcp('nocreate'))
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %FUNCTIONS
@@ -1022,8 +1029,12 @@ end
 
 %Interpolate
 disp('Interpolating')
+percent_count=10;
 for i=1:size(field,1)
-   disp([sprintf('%0.2f',100*i/size(field,1)),'% complete'])
+   if (100*i/size(field,1))>percent_count
+      disp([sprintf('%0.2f',100*i/size(field,1)),'% complete'])
+      percent_count=percent_count+10;
+   end
    for j=1:size(field,loop_num)
       if do_native==1
          local_field=squeeze(field(i,j,:,:))';
