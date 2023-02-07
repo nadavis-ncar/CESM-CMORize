@@ -115,11 +115,7 @@
        },
     "oh" : "OH",
     "rlut" : "FLUT",
-    "rsut" : {
-        "var1" : "SOLIN",
-        "var2" : "FSNTOA",
-        "eval" : "var{1}.native.value-var{2}.native.value"
-        },
+    "rsut" : "FSUTOA",
     "sadsulf" : {
         "var1" : "SAD_SULFC",
         "eval" : "var{1}.native.value*100"
