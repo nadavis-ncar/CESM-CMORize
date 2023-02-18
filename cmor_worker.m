@@ -84,12 +84,49 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
       end
    end
 
-   while ~isempty(file_list{1})
+   %Output grid label
+   grid_label='gn';
+   if strcmp(output(end),'Z')
+      grid_label=[grid_label,'z'];
+   end
 
+   %MIP-compatible model name
+   for j=1:length(globals)
+      if strcmp(globals(j).name,'source_id')
+         id_index=j;
+      end
+   end
+
+   if strcmp(frequency,'month')
+      date_ind=15;
+   else
+      date_ind=19;
+   end
+
+   %If there are some files done, then trim the file list
+   if ~strcmp(variables.operation,'TEM')   
+      dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v},'/',grid_label,'/',version,'/'];
+      if ~exist(dir_output)
+         mkdir(dir_output)
+      end
+      files_done=[];
+      for i=1:length(file_list{1})
+         file_name=file_list{1}{i};
+         outfile=[dir_output,vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
+                  '_',cmor_specification.cmor_case_name,'_',grid_label,'_',file_name(end-date_ind:end-3),'.nc'];
+         if isfile(outfile)
+            for vin=1:length(variables.var)
+               file_list{vin}(i)=[];
+            end
+         end
+      end
+   end
+
+   %Initiate postprocessing
+   while ~isempty(file_list{1})
       %Load variable(s) 
       for vin=1:length(variables.var)
          file_name=file_list{vin}{1};
-
          date=ncread(file_name,'date');
          time=ncread(file_name,'time');
          dims=parse_string(local_var_spec.dimensions);
@@ -140,7 +177,7 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
             dim{vin}{j}.out.info=dimension_info(specification,dims{j},cesm_dictionary);
             dim{vin}{j}.interp_special='';
             dim{vin}{j}.interp=[];
-         
+
             %Assimilate MIP lev info for native output
             if strcmp(dim{vin}{j}.out.info,'lev')
                dim{vin}{j}.out.info=dimension_info(specification,'standard_hybrid_sigma',cesm_dictionary);
@@ -185,7 +222,7 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
                load_ps=1;
             end 
          end
-    
+         
          %Load lev formula fields
          if load_lev==1  
             a=ncread(file_name,'hyam')*1e5;
@@ -193,6 +230,7 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
             ai=ncread(file_name,'hyai')*1e5;
             bi=ncread(file_name,'hybi');
             ilev=ncread(file_name,'ilev');
+            pure_pressure=find(b==0,1,'last');
          end
 
          %Load variable
@@ -284,7 +322,7 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
          dim_num_shift=0;
       end
 
-      %Ensure dimension ordering is correct
+      %Ensure dimension ordering is correct, if not, reorder
       permute_order=[];
       for j=1:length(var_out.dim)
          if strcmp(var_out.dim{j}.native.name,dim_native_names_list{j})
@@ -312,7 +350,15 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
          if ~isempty(var_out.dim{j}.interp)
             %Vertical interpolation on native levels, vs. on gridded dimensions
             if strcmp(var_out.dim{j}.interp_special,'vertical') & load_ps==1
-               var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN,a,b,ps_out.value);
+               if length(var_out.dim{j}.interp)==1
+                  if var_out.dim{j}.interp<var_out.dim{j}.native.value(pure_pressure)
+                     var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN);
+                  else
+                     var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN,a,b,ps_out.value);
+                  end
+               else
+                  var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN,a,b,ps_out.value);
+               end
             else
                if strcmp(variables.operation,'TEM')
                   tem_output_vars=fieldnames(var_out.tem);
@@ -381,25 +427,6 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
       %Set info for NetCDF
       var_out.info=output_var_details{v};
 
-      %MIP-compatible model name
-      for j=1:length(globals)
-         if strcmp(globals(j).name,'source_id')
-           id_index=j;
-         end
-      end
-
-      %Grid labeling
-      grid_label='gn';
-      if strcmp(output(end),'Z')
-         grid_label=[grid_label,'z'];
-      end
-
-      if strcmp(frequency,'month')
-         date_ind=15;
-      else
-         date_ind=19;
-      end 
-
       %Save to file      
       if strcmp(variables.operation,'TEM')
          tem_vars=struct2cell(var_out.tem);
@@ -417,10 +444,6 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
             create_netcdf(var_out,outfile,globals);
          end
       else
-         dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v},'/',grid_label,'/',version,'/'];
-         if ~exist(dir_output)
-            mkdir(dir_output)
-         end
          outfile=[dir_output,vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
                   '_',cmor_specification.cmor_case_name,'_',grid_label,'_',file_name(end-date_ind:end-3),'.nc'];
          if save_ps==1
