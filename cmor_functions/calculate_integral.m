@@ -1,51 +1,26 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Calculate integral in pressure
+%Expand surface pressure to full pressure field with hybrid coefficients
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function data=calculate_integral(data,ps,a,b,varargin)
+function pres=calculate_pressure(ps,a,b,varargin)
 
-data_out=zeros(size(data,1),size(data,2),size(data,4));
-do_trop=0;
-
-%Tropospheric integral?
-if nargin>5
-   do_trop=1;
-   trop=varargin{1};
+if nargin>3
+   column=varargin{1};
+else
+   column=0;
 end
 
-%Loop over all columns and integrate
-inner_loop_1=size(data,2);
-inner_loop_2=size(data,4);
-
-if do_trop==1
+if column==0
+   pres=zeros(size(ps,1),size(ps,2),length(a),size(ps,3));
    parfor i=1:size(ps,1)
       ps_local=squeeze(ps(i,:,:));
-      data_local=squeeze(data(i,:,:,:));
-      data_out_local=zeros(size(data_local,1),size(data_local,3));
-      trop_local=squeeze(trop(i,:,:));
-      for j=1:inner_loop_1
-         for t=1:inner_loop_2
-            pres=a(:)+b(:)*squeeze(ps_local(j,t));
-            [val,trop_ind]=min(abs(squeeze(trop_local(j,t)) - pres));
-            if pres(trop_ind)>squeeze(trop_local(j,t))
-               trop_ind=trop_ind-1;
-            end
-            data_out_local(j,t)=trapz(pres(trop_ind+1:end),squeeze(data_local(j,trop_ind+1:end,t)));
-            data_out_local(j,t)=squeeze(data_out_local(j,t))+(pres(trop_ind+1)-squeeze(trop_local(j,t)))*squeeze(data_local(j,trop_ind,t));
+      pres_local=zeros(size(ps_local,1),length(a),size(ps_local,2));
+      for j=1:size(ps_local,1)
+         for t=1:size(ps_local,2)
+            pres_local(j,:,t)=a(:)+b(:)*squeeze(ps_local(j,t));
          end
       end
-      data_out(i,:,:)=data_out_local;
+      pres(i,:,:,:)=pres_local;
    end
 else
- parfor i=1:size(ps,1)
-      ps_local=squeeze(ps(i,:,:));
-      data_local=squeeze(data(i,:,:,:));
-      data_out_local=zeros(size(data_local,1),size(data_local,3));
-      for j=1:inner_loop_1
-         for t=1:inner_loop_2
-            data_out_local(j,t)=trapz(a(:)+b(:)*squeeze(ps_local(j,t)),squeeze(data_local(j,:,t)));
-         end
-      end
-      data_out(i,:,:)=data_out_local;
-   end
+   pres=a(:)+b(:)*ps;
 end
-data=data_out/9.81;
