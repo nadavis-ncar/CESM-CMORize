@@ -1,43 +1,51 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Calculate integral in pressure
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function data=calculate_integral(data,varargin)
+function data=calculate_integral(data,ps,a,b,varargin)
 
-data_out=zeros(size(data.native.value,1),size(data.native.value,2),size(data.native.value,4));
-
+data_out=zeros(size(data,1),size(data,2),size(data,4));
 do_trop=0;
-
-ps=varargin{1};
-a=varargin{2};
-b=varargin{3};
-
-pres=calculate_pressure(ps,a,b);
 
 %Tropospheric integral?
 if nargin>5
-   if strcmp('tropopause',varargin{4})
-      do_trop=1;
-      trop=data.native_secondary.value;
-   end
+   do_trop=1;
+   trop=varargin{1};
 end
 
 %Loop over all columns and integrate
-for i=1:size(ps,1)
-   disp([sprintf('%3.0f',100*i/size(ps,1)),'% complete'])
-   for j=1:size(ps,2)
-      parfor t=1:size(data.native.value,4)
-         if do_trop==1
-            [val,trop_ind]=min(abs(squeeze(trop(i,j,t)) - squeeze(pres(i,j,t,:))));
-            if pres(i,j,t,trop_ind)>trop(i,j,t)
+inner_loop_1=size(data,2);
+inner_loop_2=size(data,4);
+
+if do_trop==1
+   parfor i=1:size(ps,1)
+      ps_local=squeeze(ps(i,:,:));
+      data_local=squeeze(data(i,:,:,:));
+      data_out_local=zeros(size(data_local,1),size(data_local,3));
+      trop_local=squeeze(trop(i,:,:));
+      for j=1:inner_loop_1
+         for t=1:inner_loop_2
+            pres=a(:)+b(:)*squeeze(ps_local(j,t));
+            [val,trop_ind]=min(abs(squeeze(trop_local(j,t)) - pres));
+            if pres(trop_ind)>squeeze(trop_local(j,t))
                trop_ind=trop_ind-1;
             end
-            data_out(i,j,t)=trapz(squeeze(pres(i,j,trop_ind+1:end,t)),data.native.value(i,j,trop_ind+1:end,t));
-            data_out(i,j,t)=data_out(i,j,t)+(pres(i,j,trop_ind+1,t)-trop(i,j,t))*data.native.value(i,j,trop_ind,t);
-         else
-            data_out(i,j,t)=trapz(squeeze(pres(i,j,:,t)),squeeze(data.native.value(i,j,:,t)));
+            data_out_local(j,t)=trapz(pres(trop_ind+1:end),squeeze(data_local(j,trop_ind+1:end,t)));
+            data_out_local(j,t)=squeeze(data_out_local(j,t))+(pres(trop_ind+1)-squeeze(trop_local(j,t)))*squeeze(data_local(j,trop_ind,t));
          end
       end
+      data_out(i,:,:)=data_out_local;
+   end
+else
+ parfor i=1:size(ps,1)
+      ps_local=squeeze(ps(i,:,:));
+      data_local=squeeze(data(i,:,:,:));
+      data_out_local=zeros(size(data_local,1),size(data_local,3));
+      for j=1:inner_loop_1
+         for t=1:inner_loop_2
+            data_out_local(j,t)=trapz(a(:)+b(:)*squeeze(ps_local(j,t)),squeeze(data_local(j,:,t)));
+         end
+      end
+      data_out(i,:,:)=data_out_local;
    end
 end
-
-data.native.value=data_out/9.81;
+data=data_out/9.81;
