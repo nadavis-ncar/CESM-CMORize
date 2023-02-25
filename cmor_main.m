@@ -3,10 +3,13 @@ close all
 clc
 
 ncar_mps = parallel.importProfile('/glade/u/apps/opt/matlab/parallel/ncar_mps.mlsettings');
+ncar_mps
 version=['v20230207'];
+current_dir=pwd;
+addpath([current_dir,'/cmor_functions/'])
 
 %For testing, sets to either monthly/daily file spec
-file_spec_number=2;
+file_spec_number=5;
 
 %Script to CMORize CESM output
 %Currently only functioning for the atmosphere component
@@ -70,7 +73,7 @@ outer_lim=-1;                    %While loop constraint; bootstrap to allow loop
 varsleft=length(vars);           %How many jobs left to do
 varstotal=varsleft;              %How many jobs in total
 varnum_current=[];               %Current job list
-count_limit=2;                  %Maximum number of jobs
+count_limit=8;                   %Maximum number of jobs, to stay under parallel license limit
 
 %Main loop
 while count>outer_lim
@@ -82,6 +85,7 @@ while count>outer_lim
 	   for c=1:length(varnum_current)
 	      varnum=varnum_current(c);
               state=jobs{varnum}.State;
+
 	      if strcmp(state,'finished')
 	      
 	         %Move on to new variable (in main loop) if successfully processed
@@ -110,10 +114,8 @@ while count>outer_lim
 
 	%Only submit a new variable if theres a var left to process 
 	if varsleft>0
-
 	   %Unique identifier for each job
 	   varnum=get_var_num(varsleft,varstotal);
-		
            [jobs{varnum},vars{varnum}]=submit_batch_job(varnum,cmor_structure,cmor_specification.case_output_dir,cmor_specification.cmor_output_dir);
 	   varnum_current=add_var_to_jobs(varnum_current,varnum);
 	
@@ -127,10 +129,10 @@ while count>outer_lim
 end
 
 %Clear out the temporary directory
-cd('output')
-delete('*.mat') 
-delete('*.txt')
-rmdir('Job*','s')
+%cd('job_output')
+%delete('*.mat') 
+%delete('*.txt')
+%rmdir('Job*','s')
 
 exit;
 
@@ -222,60 +224,5 @@ for i=1:length(entries)
    end
 end
 list(delete_list)=[];
-
-end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Load file and decode json
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function decoded=json_load(file)
-fid = fopen(file);
-raw = fread(fid,inf);
-str = char(raw');
-fclose(fid);
-decoded=jsondecode(str);
-
-end
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Load specification files
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [specification,specification_files]=load_specification_files(file_preamble)
-
-specification=struct;
-specs={'CV';'fx';'grids';'coordinate';'formula_terms'};
-for i=1:length(specs)
-   specification_files{i}=[file_preamble,specs{i},'.json'];
-   eval(['specification.',specs{i},'=json_load(''',specification_files{i},''');']);
-end
-
-end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Scan dictionary and return field
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function out=translate_cesm(dictionary,in,field,closest_match)
-
-out=[];
-
-dictionary_entries=fieldnames(eval(['dictionary.',field]));
-for i=1:length(dictionary_entries)
-   if strcmp(dictionary_entries{i},in)
-      out=eval(['dictionary.',field,'.',dictionary_entries{i}]);
-   end
-end
-
-if closest_match==1
-   if isempty(out)
-      for i=1:length(dictionary_entries)
-         if contains(in,dictionary_entries{i})
-            out=eval(['dictionary.',field,'.',dictionary_entries{i}]);
-         end
-      end
-   end
-end
-
-if isempty(out)
-   out='no_match';
-end
 
 end
