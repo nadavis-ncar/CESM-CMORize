@@ -92,25 +92,21 @@ for i=1:length(var_out.dim)
 end
 
 netcdf.endDef(ncid);
-
 start=zeros(length(var_out.dim),1);
 for i=1:length(var_out.dim)
    ending(i)=length(var_out.dim{i}.out.value);
 end
-netcdf.putVar(ncid,var,start,ending,var_out.native.value);
+netcdf.putVar(ncid,var,start,ending,var_out.native.value)
 if do_ps==1
    netcdf.putVar(ncid,var_ps,ps.value);
    for i=1:length(var_formula)
       netcdf.putVar(ncid,var_formula(i),formula{i}.value);
    end
 end
-
 for i=1:length(var_out.dim)
-   netcdf.putVar(ncid,var_dim(i),var_out.dim{i}.out.value);
+   netcdf.putVar(ncid,var_dim(i),var_out.dim{i}.out.value)
    if length(var_out.dim{i}.out.value)>1
       netcdf.putVar(ncid,var_dim_bnds(i),var_out.dim{i}.out.bnds);
    end
 end
-
 netcdf.close(ncid);
-
