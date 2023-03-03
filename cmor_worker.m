@@ -73,10 +73,10 @@ if isempty(variables.var) & strcmp(variables.operation,'TEM') & tem==0
    tem=1;
 end
 
-%Either we're not outputting the variable or we've already done it (TEM)
+%Check if the variable will be output or not
 if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
 
-   %Assemble file list(s)
+   %Assemble input file list(s)
    for vin=1:length(variables.var)
       var_files=dir([dir_input,'*.',variables.var{vin},'.*']);
       for i=1:length(var_files)
@@ -122,16 +122,36 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
       end
    end
 
-   if isempty(file_list)
-      disp('No input data for given variable')
+   %The odd case where everything is already done
+   if isempty(file_list{1})
+      disp('No data left to process for this variable')
    end
 
    %Initiate postprocessing
    while ~isempty(file_list{1})
-
       %Load variable(s) 
       for vin=1:length(variables.var)
-         file_name=file_list{vin}{1};
+         if vin>1
+           %Ensure file lists are consistent dates
+           file_name=file_list{1}{1};
+           date_str=file_name(end-date_ind:end-3);
+           file_name=file_list{vin}{1};
+           date_str_2=file_name(end-date_ind:end-3);
+           f_2=1;
+           while ~strcmp(date_str,date_str_2)
+              f_2=f_2+1;
+              if f_2>length(file_list{vin})
+                 error('No files with dates matching main variable file')
+              else
+                 file_name=file_list{vin}{f_2};
+                 date_str_2=file_name(end-date_ind:end-3);
+              end
+           end
+           file_name=file_list{vin}{f_2};
+         else
+           file_name=file_list{vin}{1};
+         end            
+
          date_string=file_name(end-date_ind:end-3);
          date=ncread(file_name,'date');
          time=ncread(file_name,'time');
@@ -180,30 +200,32 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
             end
 
             if ~strcmp(dim{vin}{j}.native.name,'no_match')
-               dim{vin}{j}.native.ind=find(strcmp(dim_native,dim{vin}{j}.native.name),1,'first');
                dim_native(strcmp(dim{vin}{j}.native.name,dim_native_names))=[];
                dim_native_names(strcmp(dim{vin}{j}.native.name,dim_native_names))=[]; 
                dim{vin}{j}.native.value=ncread(file_name,dim{vin}{j}.native.name);
                dim{vin}{j}.out.name=dims{j};
                dim{vin}{j}.out.info=dimension_info(specification,dims{j},cesm_dictionary);
-               dim{vin}{j}.interp_special='';
+               dim{vin}{j}.interp_direction='';
                dim{vin}{j}.interp=[];
 
                %Assimilate MIP lev info for native output
                if strcmp(dim{vin}{j}.out.info,'lev')
                   dim{vin}{j}.out.info=dimension_info(specification,'standard_hybrid_sigma',cesm_dictionary);
                end
+
+               %If we need to interpolate to a new vertical grid
                if (strcmp('lev',dim{vin}{j}.native.name) | strcmp('ilev',dim{vin}{j}.native.name)) ...
                   & sum(strcmp(fieldnames(specification.coordinate.axis_entry),dim{vin}{j}.out.name))>0
                   dim{vin}{j}=get_requested_axis_value(dim{vin}{j},specification.coordinate.axis_entry);
-                  dim{vin}{j}.interp_special='vertical';
+                  dim{vin}{j}.interp_direction='vertical';
                end     
 
+               %Convert from hPa to Pa
                if strcmp(dim{vin}{j}.native.name,'ilev') | strcmp(dim{vin}{j}.native.name,'lev')
                   dim{vin}{j}.native.value=dim{vin}{j}.native.value*100;
                end
 
-               %do we need to interpolate the vertical grid?
+               %Set load settings if we need to interpolate the vertical grid
                if strcmp(dim{vin}{j}.native.name,'lev')                
                   lev_dim=j;
                   load_lev=1;
@@ -211,10 +233,7 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
                   if isempty(dim{vin}{j}.interp)
                      save_ps=1;
                   end
-                  if strcmp(dim{vin}{j}.out.name,'alevel')
-                     dim{vin}{j}.out.name='lev';
-                     dim{vin}{j}.interp='';
-                  elseif strcmp(dim{vin}{j}.out.name,'alevhalf')
+                  if contains(dim{vin}{j}.out.name,'lev')              
                      dim{vin}{j}.out.name='lev';
                      dim{vin}{j}.interp='';
                   end
@@ -224,12 +243,15 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
                if strcmp(dim{vin}{j}.native.name,'time')
                   dim{vin}{j}.out.info.units=ncreadatt(file_name,'time','units');
                end
+
+               %Case where the output dimension is really a single-level field
+               %Could be a creative way to handle this but it seems to be a single case
             elseif strcmp(dims{j},'height2m')
                dim{vin}{j}.out.name=dims{j};
                dim{vin}{j}.out.info=dimension_info(specification,dims{j},cesm_dictionary);
                dim{vin}{j}.native.value=2.0;
                dim{vin}{j}.native.name='height2m';
-               dim{vin}{j}.interp_special='';
+               dim{vin}{j}.interp_direction='';
                dim{vin}{j}.interp=[];
                dim_native_names_list{j}='height2m';
                dim_native_values{j}=2.0;
@@ -238,7 +260,7 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
             end
          end
 
-        %Is lev dimension being removed? Probably need to load fields
+        %Is lev dimension being removed (integration, single-level interp)? Need to load native grid info
          if ~isempty(dim_native)
             if strcmp(dim_native_names,'lev')
                load_lev=1;
@@ -264,7 +286,7 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
          end
          var{vin}.native.name=variables.var{vin};
 
-         %Load ps
+         %Load ps from equivalent-date file
          if load_ps==1
             var_files=dir([dir_input,'*.PS.*',date_string,'*']);
             file_name_ps=[var_files(1).folder,'/',var_files(1).name];
@@ -277,27 +299,22 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
          end 
       end
 
-      %Inherit dimensions of input var
+      %Inherit output dimensions of input var
       var_out.dim=dim{1};
 
-      %Note dimensions to be removed (must be empty to save variable)
+      %Note dimensions to be removed 
       var_out.dim_names_to_remove=dim_native_names;
       var_out.dim_to_remove=dim_native;
 
-      %Perform arithmetic operation
-      %Eval converts a string to code and executes
+      %Perform arithmetic operations, or load secondary variable for a calculation
+      %Eval converts a string from JSON to code and executes
       if isstruct(variables)
          if ~isempty(variables.eval) 
             eval(['var_out.native.value=',variables.eval{1},';'])
          else
             var_out.native=var{1}.native;
             if length(var)>1
-               if strcmp(variables.var{2},'T')
-                  var_out.native.value=var_out.native.value./var{2}.native.value;
-                  var{2}.native.value=[];
-               else              
-                  var_out.native_secondary=var{2}.native;
-               end
+               var_out.native_secondary=var{2}.native;
             end
          end 
       else
@@ -310,6 +327,8 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
          end
       end
 
+      clear var
+
       for j=1:length(dim_native_names_list)
          var_out.native_dim(j).name=dim_native_names_list{j};
          var_out.native_dim(j).value=dim_native_values{j};
@@ -320,37 +339,34 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
          operation=variables.operation;
          switch operation
             case 'age_of_air'
-               disp('calculating age of air')
                var_out.native.value=age_of_air(var_out.native.value,var_out.dim{3}.native.value,var_out.dim{2}.native.value,variables.p0,variables.lat0);
             case 'sum'
-               var_out=calculate_sum(var_out,variables.axis,ps_out.value,a,b);
+               var_out=calculate_sum(var_out,variables.axis);
             case 'ozone_integral'
-               var_out=convert_units(var_out,ps_out.value,a,b,'molar_mixing_ratio_to_DU');
+               var_out.native.value=convert_units(var_out.native.value,ps_out.value,a,b,'molar_mixing_ratio_to_DU');
                if strcmp(fieldnames(var_out),'native_secondary')
                   var_out.native.value=calculate_integral(var_out.native.value,ps_out.value,a,b,var_out.native_secondary);
                else
                   var_out.native.value=calculate_integral(var_out.native.value,ps_out.value,a,b);
                end
             case 'burden'
-               var_out=convert_units(var_out,ps_out.value,a,b,'number_density_to_molar_mixing_ratio');
-               var_out=calculate_integral(var_out,ps_out.value,a,b);
+               var_out.native.value=var_out.native.value.*var_out.native_secondary.value;
+disp('burden')
+               var_out.native.value=convert_units(var_out.native.value,ps_out.value,a,b,'number_density_to_molar_mixing_ratio');
+disp('integral')
+               var_out.native.value=calculate_integral(var_out.native.value,ps_out.value,a,b);
+disp('done')
             case 'max_value'
                var_out=calculate_maximum(var_out,variables.axis);
             case 'omega_to_w'
+               var_out.native.value=var_out.native.value./var_out.native_secondary.value;
                var_out.native.value=omega_to_w(var_out.native.value,ps_out.value,a,b);
             case 'TEM'
                var_out=calculate_tem(var_out,str2num(output_file.Header.missing_value));
          end
       end
 
-      %Need to generalize to all cases
-      if ~isempty(dim_native)
-         dim_num_shift=1;
-      else
-         dim_num_shift=0;
-      end
-
-      %Ensure dimension ordering is correct, if not, reorder
+      %Ensure dimension ordering is correct, if not, map out the reorder
       permute_order=[];
       for j=1:length(var_out.dim)
          if strcmp(var_out.dim{j}.native.name,dim_native_names_list{j})
@@ -363,46 +379,48 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
             end
          end
       end
-
+disp('reordering')
       %Only attempt reordering if necessary - typically for single pressure-level output
       if length(permute_order) == length(size(var_out.native.value))    
-         if max(permute_order) > length(size(var_out.native.value))
-            [val,loc]=max(permute_order);
-            permute_order(loc)=permute_order(loc)-1;
+         if sum(diff(permute_order)<0)>0
+            if max(permute_order) > length(size(var_out.native.value))
+               [val,loc]=max(permute_order);
+               permute_order(loc)=permute_order(loc)-1;
+            end
+            var_out.native.value=permute(var_out.native.value,permute_order);
+            for k=1:length(var_out.native_dim)
+               native_names_reorder{k}=var_out.native_dim(permute_order(k)).name;
+            end
+            for k=1:length(var_out.native_dim)
+               var_out.native_dim(k).name=native_names_reorder{k};
+            end
          end
-         var_out.native.value=permute(var_out.native.value,permute_order);
       end
-size(var_out.native.value)
-size(var_out.dim)
-
-
+disp('interp')
       %Do any interpolation
       for j=1:length(var_out.dim) 
          if ~isempty(var_out.dim{j}.interp)
-            %Vertical interpolation on native levels, vs. on gridded dimensions
-            %Need to clean up logic/shorten
-            if strcmp(var_out.dim{j}.interp_special,'vertical') & load_ps==1 
-               if length(var_out.dim{j}.interp)==1
-                  if var_out.dim{j}.interp<var_out.dim{j}.native.value(pure_pressure)
-                     var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN);
-                  else
-                     var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN,a,b,ps_out.value);
-                  end
-               else
-                 var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN,a,b,ps_out.value);
-               end
-            elseif strcmp(var_out.dim{j}.interp_special,'vertical') & load_ps==0
-               var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN);
-            elseif strcmp(variables.operation,'TEM')
-                tem_output_vars=fieldnames(var_out.tem);
-                for k=1:length(tem_output_vars)
-                   eval(['var_out.tem.',tem_output_vars{k},'=interpolate_field(var_out.tem.',tem_output_vars{k},',j+dim_num_shift,var_out.dim{j},NaN);']);
-                end
+            %Assign dim index to be interpolated - mapping between native and output space
+            if strcmp(var_out.dim{j}.interp_direction,'vertical')
+               dimsearch='lev';
             else
-                var_out.native.value=interpolate_field(var_out.native.value,j+dim_num_shift,var_out.dim{j},NaN);
-                if load_ps==1
-                   ps_out.value=interpolate_field(ps_out.value,j+dim_num_shift,var_out.dim{j});
-                end
+               dimsearch=var_out.dim{j}.name;
+            end
+            interp_dim=get_dim_index(var_out.native_dim,dimsearch,'contains');
+            %Carry out interpolation
+            if strcmp(var_out.dim{j}.interp_direction,'vertical') 
+               if strcmp(variables.operation,'TEM')
+                  tem_output_vars=fieldnames(var_out.tem);
+                  for k=1:length(tem_output_vars)
+                     eval(['var_out.tem.',tem_output_vars{k},'=interpolate_field(var_out.tem.',tem_output_vars{k},',interp_dim,var_out.dim{j},NaN);']);
+                  end
+               elseif load_ps==1
+                  var_out.native.value=interpolate_field(var_out.native.value,interp_dim,var_out.dim{j},NaN,a,b,ps_out.value);
+               else
+                  var_out.native.value=interpolate_field(var_out.native.value,interp_dim,var_out.dim{j},NaN);
+               end
+            else
+               var_out.native.value=interpolate_field(var_out.native.value,interp_dim,var_out.dim{j},NaN);
             end
             var_out.dim{j}.out.value=var_out.dim{j}.interp;
          else
@@ -410,7 +428,7 @@ size(var_out.dim)
          end
       end
 
-      %Averaging
+      %Averaging - could generalize to any dim (will this ever need to change?)
       for j=1:length(local_var_spec.averaging)
          if ~strcmp(local_var_spec.averaging{j},'time') & strcmp(local_var_spec.averaging{j},'longitude') & length(remove_list)==0
             var_out.native.value=squeeze(mean(var_out.native.value,1,'omitnan'));
@@ -419,10 +437,7 @@ size(var_out.dim)
          end
       end
 
-      %Replace all NaNs with missing values  
-      var_out.native.value(isnan(var_out.native.value))=str2num(output_file.Header.missing_value);
-
-      %Ensure dimension directions are consistent with file specification
+      %Ensure dimension directions are consistent with file specifications
       var_out=stored_direction(var_out);   
 
       do_ab=0;
@@ -458,7 +473,7 @@ size(var_out.dim)
 
       %Set info for NetCDF
       var_out.info=output_var_details{v};
-
+disp('save')
       %Save to file      
       if strcmp(variables.operation,'TEM')
          tem_vars=struct2cell(var_out.tem);
@@ -469,18 +484,13 @@ size(var_out.dim)
             if ~exist(dir_output)
                mkdir(dir_output)
             end
-
-            %Take care of NaN/missing values
-            var_out.native.value(isinf(var_out.native.value))=str2num(output_file.Header.missing_value);
-            var_out.native.value(isnan(var_out.native.value))=str2num(output_file.Header.missing_value);
-            var_out.native.value(abs(var_out.native.value)>str2num(output_file.Header.missing_value))=...
-               sign(var_out.native.value(abs(var_out.native.value)>str2num(output_file.Header.missing_value)))*str2num(output_file.Header.missing_value);
-
+            var_out=set_fill_values(var_out,str2num(output_file.Header.missing_value));
             outfile=[dir_output,tem_output_vars{k},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
                     '_',cmor_specification.cmor_case_name,'_',grid_label,'_',file_name(end-date_ind:end-3),'.nc'];
             create_netcdf(var_out,outfile,globals);
          end
       else
+         var_out=set_fill_values(var_out,str2num(output_file.Header.missing_value));
          outfile=[dir_output,vars{v},'_',output,'_',globals(id_index).value,'_',cmor_specification.cmor_experiment,...
                   '_',cmor_specification.cmor_case_name,'_',grid_label,'_',file_name(end-date_ind:end-3),'.nc'];
          if save_ps==1
