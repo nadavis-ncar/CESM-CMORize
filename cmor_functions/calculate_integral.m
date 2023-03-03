@@ -22,8 +22,8 @@ if do_trop==1
       data_local=squeeze(data(i,:,:,:));
       data_out_local=zeros(size(data_local,1),size(data_local,3));
       trop_local=squeeze(trop(i,:,:));
-      for j=1:inner_loop_1
-         for t=1:inner_loop_2
+      for j=1:size(data_local,1)
+         for t=1:size(data_local,3)
             pres=a(:)+b(:)*squeeze(ps_local(j,t));
             [val,trop_ind]=min(abs(squeeze(trop_local(j,t)) - pres));
             if pres(trop_ind)>squeeze(trop_local(j,t))
@@ -36,13 +36,14 @@ if do_trop==1
       data_out(i,:,:)=data_out_local;
    end
 else
- parfor i=1:size(ps,1)
+   parfor i=1:size(ps,1)
       ps_local=squeeze(ps(i,:,:));
       data_local=squeeze(data(i,:,:,:));
       data_out_local=zeros(size(data_local,1),size(data_local,3));
-      for j=1:inner_loop_1
-         for t=1:inner_loop_2
-            data_out_local(j,t)=trapz(a(:)+b(:)*squeeze(ps_local(j,t)),squeeze(data_local(j,:,t)));
+      for j=1:size(data_local,1)
+         for t=1:size(data_local,3)
+            pres=a(:)+b(:)*squeeze(ps_local(j,t));
+            data_out_local(j,t)=trapz(pres,squeeze(data_local(j,:,t)));
          end
       end
       data_out(i,:,:)=data_out_local;
