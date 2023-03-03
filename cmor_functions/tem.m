@@ -1,7 +1,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Calculates TEM output
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function var_out=calculate_tem(var_out)
+function var_out=calculate_tem(var_out,missing_value)
 
 g=9.81;
 a=6371e3;
@@ -34,7 +34,9 @@ var_out.tem.wtem=zeros(size(uzm));
 var_out.tem.epfy=zeros(size(uzm));
 var_out.tem.epfz=zeros(size(uzm));
 
-parfor t=1:length(time)
+%This operation is so fast, the overhead of parallel is probably longer than just
+%doing this with one core unless the time dimension is VERY large
+for t=1:length(time)
    [dudz,dummy]=gradient(squeeze(uzm(:,:,t)),squeeze(z(1,:,1)),squeeze(phi(:,1,1)));
    [dummy,dudy]=gradient(squeeze(uzm(:,:,t)).*cosmat,squeeze(z(1,:,1)),squeeze(phi(:,1,1)));
    dudy=dudy.*(1./(a*cosmat));
@@ -57,4 +59,3 @@ parfor t=1:length(time)
    var_out.tem.epfy(:,:,t)=epfy./rho;
    var_out.tem.epfz(:,:,t)=epfz./rho;
 end
-
