@@ -3,6 +3,6 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function data=calculate_maximum(data,dim_name)
 
-dim_num=data.dim_to_remove(find(strcmp(data.dim_names_to_remove,dim_name),1,'first'));
-data.native.value=squeeze(max(data.native.value,[],dim_num));
-
+dim_index=get_dim_index(data.native_dim,dim_name,'exact');
+data.native.value=squeeze(max(data.native.value,[],dim_index));
+data.native_dim(dim_index)=[];
