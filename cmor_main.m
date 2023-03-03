@@ -9,7 +9,7 @@ current_dir=pwd;
 addpath([current_dir,'/cmor_functions/'])
 
 %For testing, sets to either monthly/daily file spec
-file_spec_number=5;
+file_spec_number=4;
 
 %Script to CMORize CESM output
 %Currently only functioning for the atmosphere component
@@ -80,17 +80,17 @@ while count>outer_lim
 
 	%Monitor each job, resubmit failures/submit new job
 	while length(varnum_current) == count_limit && count>0
-         vars_to_remove=[];
+           vars_to_remove=[];
 
 	   for c=1:length(varnum_current)
 	      varnum=varnum_current(c);
-         state=jobs{varnum}.State;
+              state=jobs{varnum}.State;
 
 	      if strcmp(state,'finished')
 	      
 	         %Move on to new variable (in main loop) if successfully processed
 	         count=count-1;
-            vars_to_remove=cat(1,vars_to_remove,varnum);
+                 vars_to_remove=cat(1,vars_to_remove,varnum);
 
 	      elseif strcmp(state,'failed')
 	      
@@ -99,7 +99,7 @@ while count>outer_lim
  	      end
 	   end
 
-      %Remove variables if successfully processed
+           %Remove variables if successfully processed
 	   if ~isempty(vars_to_remove)
 	      for i=1:length(vars_to_remove)
 	         varnum_current=remove_var_from_jobs(varnum_current,vars_to_remove(i));
@@ -116,14 +116,15 @@ while count>outer_lim
 	if varsleft>0
 	   %Unique identifier for each job
 	   varnum=get_var_num(varsleft,varstotal);
-      [jobs{varnum},vars{varnum}]=submit_batch_job(varnum,cmor_structure,cmor_specification.case_output_dir,cmor_specification.cmor_output_dir);
+           [jobs{varnum},vars{varnum}]=submit_batch_job(varnum,cmor_structure,cmor_specification.case_output_dir,cmor_specification.cmor_output_dir);
 	   varnum_current=add_var_to_jobs(varnum_current,varnum);
 	
 	   count=count+1;
 	   varsleft=varsleft-1;
+ 
 	end
 
-   outer_lim=0;
+        outer_lim=0;
 	count=length(varnum_current);
 end
 
