@@ -19,42 +19,54 @@ interp_len=length(dim.interp);
 field_size(interp_dim)=interp_len;
 field_out=zeros(field_size);
 
-if interp_dim==2
-   loop_num=3;
-else
-   loop_num=2;
-end
-
 %Interpolate
-disp('Interpolating')
 for i=1:size(field,1)
-   disp([sprintf('%0.2f',100*i/size(field,1)),'% complete'])
+
+   %Data is in hybrid-sigma coordinates
    if do_native==1
       inner_loop=size(field,3);
-      parfor j=1:size(field,loop_num)
+      parfor j=1:size(field,2)
          local_field=squeeze(field(i,j,:,:));
          local_ps=squeeze(ps(i,j,:));
-         local_field_out=zeros(size(local_field,3),interp_len);
-         for k=1:inner_loop
-            local_field_out(k,:)=interp1(squeeze(local_ps(k))*b+a,squeeze(local_field(k,:)),...
-                                         dim.interp,'linear',missing_value);
-         end
+         if interp_dim==4
+            local_field_out=zeros(inner_loop,interp_len);
+            for k=1:inner_loop
+               local_field_out(k,:)=interp1(local_ps(k)*b+a,squeeze(local_field(k,:)),...
+                                            dim.interp,'linear',missing_value);
+            end
+         else
+            local_field_out=zeros(interp_len,inner_loop);
+            for k=1:inner_loop
+               local_field_out(:,k)=interp1(local_ps(k)*b+a,squeeze(local_field(:,k)),...
+                                            dim.interp,'linear',missing_value);
+            end
+         end 
          field_out(i,j,:,:)=local_field_out;
       end
+
+   %Data is on pressure levels
    else
-      fieldsize=length(size(field));
+      fieldsize=length(size(field_out));
       switch fieldsize
          case 2
-            parfor j=1:size(field,2)
+            for j=1:size(field,2)
                field_out(i,j)=interp1(dim.native.value,...
                                       squeeze(field(i,j,:)),dim.interp,...
                                       'linear',missing_value);
             end
          case 3
-            parfor j=1:size(field,3)
-               field_out(i,:,j)=interp1(dim.native.value,...
+            if interp_dim==2
+               for j=1:size(field,3)
+                  field_out(i,:,j)=interp1(dim.native.value,...
                                         squeeze(field(i,:,j)),dim.interp,...
                                         'linear',missing_value);
+               end
+            else 
+               for j=1:size(field,2)
+                  field_out(i,j,:)=interp1(dim.native.value,...
+                                        squeeze(field(i,j,:)),dim.interp,...
+                                        'linear',missing_value);
+               end
             end
          case 4
          inner_loop=size(field,3);
@@ -71,3 +83,5 @@ for i=1:size(field,1)
       end
    end
 end
+
+%Future work: this can be cleaned up with a better delineation among cases.
