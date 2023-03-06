@@ -5,14 +5,10 @@ cmor_structure
 worker_input
 
 %Loading necessary worker, cmor information from input structures
-cmor_specification_file=cmor_structure.cmor_specification_file;
 cmor_specification=cmor_structure.cmor_specification;
 specification=cmor_structure.specification;
-output_specification_files=cmor_structure.output_specification_files;
 cesm_dictionary=cmor_structure.cesm_dictionary;
 cesm_globals=cmor_structure.cesm_globals;
-cesm_globals_names=cmor_structure.cesm_globals_names;
-file_spec_number=cmor_structure.file_spec_number;
 v=worker_input.varnum;
 output_file=cmor_structure.output_file;
 output=cmor_structure.output;
@@ -20,8 +16,6 @@ vars=cmor_structure.vars;
 vars_info=cmor_structure.vars_info;
 output_var_details=cmor_structure.output_var_details;
 local_var_spec=cmor_structure.local_var_spec;
-dir_input_main=cmor_structure.dir_input_main;
-realm=worker_input.realm;
 frequency=worker_input.frequency;
 variables_list=worker_input.variables_list;
 dir_input=worker_input.dir_input;
@@ -351,11 +345,8 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
                end
             case 'burden'
                var_out.native.value=var_out.native.value.*var_out.native_secondary.value;
-disp('burden')
                var_out.native.value=convert_units(var_out.native.value,ps_out.value,a,b,'number_density_to_molar_mixing_ratio');
-disp('integral')
                var_out.native.value=calculate_integral(var_out.native.value,ps_out.value,a,b);
-disp('done')
             case 'max_value'
                var_out=calculate_maximum(var_out,variables.axis);
             case 'omega_to_w'
@@ -379,7 +370,7 @@ disp('done')
             end
          end
       end
-disp('reordering')
+
       %Only attempt reordering if necessary - typically for single pressure-level output
       if length(permute_order) == length(size(var_out.native.value))    
          if sum(diff(permute_order)<0)>0
@@ -396,7 +387,7 @@ disp('reordering')
             end
          end
       end
-disp('interp')
+
       %Do any interpolation
       for j=1:length(var_out.dim) 
          if ~isempty(var_out.dim{j}.interp)
@@ -473,7 +464,7 @@ disp('interp')
 
       %Set info for NetCDF
       var_out.info=output_var_details{v};
-disp('save')
+
       %Save to file      
       if strcmp(variables.operation,'TEM')
          tem_vars=struct2cell(var_out.tem);
