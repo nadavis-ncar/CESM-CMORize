@@ -4,7 +4,6 @@
 function field_out=interpolate_field(field,interp_dim,dim,missing_value,varargin)
 
 do_native=0;
-
 %Optional: load in surface pressure, a/b's for vertical interp, generate pressure array
 if nargin>4
    a=varargin{1};
@@ -21,30 +20,35 @@ field_out=zeros(field_size);
 
 %Interpolate
 for i=1:size(field,1)
-
    %Data is in hybrid-sigma coordinates
    if do_native==1
-      inner_loop=size(field,3);
-      parfor j=1:size(field,2)
-         local_field=squeeze(field(i,j,:,:));
-         local_ps=squeeze(ps(i,j,:));
-         if interp_dim==4
-            local_field_out=zeros(inner_loop,interp_len);
-            for k=1:inner_loop
-               local_field_out(k,:)=interp1(local_ps(k)*b+a,squeeze(local_field(k,:)),...
-                                            dim.interp,'linear',missing_value);
+      switch interp_dim
+         case 3
+            inner_loop=size(field,4);
+            parfor j=1:size(field,2)
+               local_field=squeeze(field(i,j,:,:));
+               local_ps=squeeze(ps(i,j,:));
+               local_field_out=zeros(inner_loop,interp_len);
+               for k=1:inner_loop
+                  local_field_out(k,:)=interp1(local_ps(k)*b+a,squeeze(local_field(:,k)),...
+                                                         dim.interp,'linear',missing_value);
+               end
+               field_out(i,j,:,:)=local_field_out';
             end
-         else
-            local_field_out=zeros(interp_len,inner_loop);
-            for k=1:inner_loop
-               local_field_out(:,k)=interp1(local_ps(k)*b+a,squeeze(local_field(:,k)),...
-                                            dim.interp,'linear',missing_value);
+         case 4
+            inner_loop=size(field,3);
+            parfor j=1:size(field,2)
+               local_field=squeeze(field(i,j,:,:));
+               local_ps=squeeze(ps(i,j,:));
+               local_field_out=zeros(inner_loop,interp_len);
+               for k=1:inner_loop
+                  local_field_out(k,:)=interp1(local_ps(k)*b+a,squeeze(local_field(k,:)),...
+                                               dim.interp,'linear',missing_value);
+               end
+               field_out(i,j,:,:)=local_field_out;
             end
-         end 
-         field_out(i,j,:,:)=local_field_out;
       end
-
-   %Data is on pressure levels
+   %Data is on pressure levels, with varying shapes
    else
       fieldsize=length(size(field_out));
       switch fieldsize
@@ -83,5 +87,3 @@ for i=1:size(field,1)
       end
    end
 end
-
-%Future work: this can be cleaned up with a better delineation among cases.
