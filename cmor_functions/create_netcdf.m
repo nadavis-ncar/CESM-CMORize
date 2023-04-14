@@ -18,7 +18,12 @@ end
 ncid=netcdf.create(filename,'NETCDF4');
 varid = netcdf.getConstant('GLOBAL');
 for i=1:length(globals)
-   netcdf.putAtt(ncid,varid,globals(i).name,globals(i).value);
+   switch class(globals(i).value)
+      case 'int32'
+         netcdf.putAtt(ncid,varid,globals(i).name,globals(i).value,'NC_INT');
+      otherwise
+         netcdf.putAtt(ncid,varid,globals(i).name,globals(i).value);
+   end
 end
 
 for i=1:length(var_out.dim)
@@ -39,6 +44,7 @@ end
 dim(i+1)=netcdf.defDim(ncid,'bnds',2);
 
 var=netcdf.defVar(ncid,var_out.info.out_name,'NC_FLOAT',dim(1:end-1));
+netcdf.defVarDeflate(ncid,var,true, true, 1);
 attnames=fieldnames(var_out.info);
 atts=struct2cell(var_out.info);
 for i=1:length(atts)
@@ -46,9 +52,10 @@ for i=1:length(atts)
       netcdf.putAtt(ncid,var,attnames{i},atts{i});
    end
 end
-
+netcdf.defVarFill(ncid,var,false,var_out.info.missing_value);
 if do_ps==1
    var_ps=netcdf.defVar(ncid,'ps','NC_FLOAT',ps_dim);
+   netcdf.defVarDeflate(ncid,var_ps,true, true, 1);
    attnames=fieldnames(ps.info);
    atts=struct2cell(ps.info);
    for i=1:length(atts)
@@ -64,7 +71,7 @@ if do_ps==1
       else
          formula_dims{i}=dim(lev_ind);
       end
-      var_formula(i)=netcdf.defVar(ncid,formula_names{i},'NC_FLOAT',formula_dims{i});
+      var_formula(i)=netcdf.defVar(ncid,formula_names{i},'NC_DOUBLE',formula_dims{i});
       attnames=fieldnames(formula{i}.info{1});
       atts=struct2cell(formula{i}.info{1});
       for j=1:length(atts)
@@ -75,9 +82,10 @@ if do_ps==1
    end
 end
 for i=1:length(var_out.dim)
-   var_dim(i)=netcdf.defVar(ncid,var_out.dim{i}.out.info.out_name,'NC_FLOAT',dim(i));
+   var_dim(i)=netcdf.defVar(ncid,var_out.dim{i}.out.info.out_name,'NC_DOUBLE',dim(i));
+   netcdf.defVarDeflate(ncid,var_dim(i),true, true, 1);
    if length(var_out.dim{i}.out.value)>1
-      var_dim_bnds(i)=netcdf.defVar(ncid,[var_out.dim{i}.out.info.out_name,'_bnds'],'NC_FLOAT',[dim(end) dim(i)]);
+      var_dim_bnds(i)=netcdf.defVar(ncid,[var_out.dim{i}.out.info.out_name,'_bnds'],'NC_DOUBLE',[dim(end) dim(i)]);
    end
    attnames=fieldnames(var_out.dim{i}.out.info);
    atts=struct2cell(var_out.dim{i}.out.info);
@@ -85,7 +93,7 @@ for i=1:length(var_out.dim)
        if ~isempty(atts{j}) & sum(strcmp(attnames{j},{'out_name';'must_have_bounds';'stored_direction';'type';'requested'}))==0
           netcdf.putAtt(ncid,var_dim(i),attnames{j},atts{j});
           if length(var_out.dim{i}.out.value)>1
-             netcdf.putAtt(ncid,var_dim_bnds(i),attnames{j},atts{j});
+             %netcdf.putAtt(ncid,var_dim_bnds(i),attnames{j},atts{j});
           end
        end
    end
@@ -96,17 +104,17 @@ start=zeros(length(var_out.dim),1);
 for i=1:length(var_out.dim)
    ending(i)=length(var_out.dim{i}.out.value);
 end
-netcdf.putVar(ncid,var,start,ending,var_out.native.value)
+netcdf.putVar(ncid,var,start,ending,single(var_out.native.value))
 if do_ps==1
-   netcdf.putVar(ncid,var_ps,ps.value);
+   netcdf.putVar(ncid,var_ps,single(ps.value));
    for i=1:length(var_formula)
       netcdf.putVar(ncid,var_formula(i),formula{i}.value);
    end
 end
 for i=1:length(var_out.dim)
-   netcdf.putVar(ncid,var_dim(i),var_out.dim{i}.out.value)
+   netcdf.putVar(ncid,var_dim(i),double(var_out.dim{i}.out.value))
    if length(var_out.dim{i}.out.value)>1
-      netcdf.putVar(ncid,var_dim_bnds(i),var_out.dim{i}.out.bnds);
+      netcdf.putVar(ncid,var_dim_bnds(i),double(var_out.dim{i}.out.bnds));
    end
 end
 netcdf.close(ncid);
