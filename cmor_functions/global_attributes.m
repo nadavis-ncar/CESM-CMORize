@@ -10,6 +10,7 @@ mip_globals_name=fieldnames(CV_file);
 mip_globals=struct2cell(CV_file);
 
 for i=1:length(required_attributes)
+
    globals(i).name=required_attributes{i};
    overwrite=0;
 
@@ -18,7 +19,14 @@ for i=1:length(required_attributes)
       if strcmp(globals(i).name,cesm_globals_name{j})
          input=cesm_globals{j};
          if isstruct(input)
-            input=eval([input.eval]);
+            input_names=fieldnames(input);
+            if sum(strcmp(input_names,'eval'))>0
+               input=eval([input.eval]);
+            else
+               input_string=input.tracking_id;
+               [status,uuid] = system('/glade/scratch/nadavis/CCMI/CCMI-2022/uuid/bin/uuid');
+               input=[input_string,uuid(1:end-1)];
+            end
          end
          overwrite=1;
       end
