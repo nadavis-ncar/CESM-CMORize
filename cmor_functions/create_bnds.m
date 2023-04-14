@@ -59,4 +59,3 @@ else
       bnds(:,end)=[-(dim(end)-dim(end-1))/2 (dim(end)-dim(end-1))/2]+dim(end);
    end
 end
-
