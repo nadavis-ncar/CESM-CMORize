@@ -5,10 +5,14 @@ cmor_structure
 worker_input
 
 %Loading necessary worker, cmor information from input structures
+cmor_specification_file=cmor_structure.cmor_specification_file;
 cmor_specification=cmor_structure.cmor_specification;
 specification=cmor_structure.specification;
+output_specification_files=cmor_structure.output_specification_files;
 cesm_dictionary=cmor_structure.cesm_dictionary;
 cesm_globals=cmor_structure.cesm_globals;
+cesm_globals_names=cmor_structure.cesm_globals_names;
+file_spec_number=cmor_structure.file_spec_number;
 v=worker_input.varnum;
 output_file=cmor_structure.output_file;
 output=cmor_structure.output;
@@ -16,6 +20,8 @@ vars=cmor_structure.vars;
 vars_info=cmor_structure.vars_info;
 output_var_details=cmor_structure.output_var_details;
 local_var_spec=cmor_structure.local_var_spec;
+dir_input_main=cmor_structure.dir_input_main;
+realm=worker_input.realm;
 frequency=worker_input.frequency;
 variables_list=worker_input.variables_list;
 dir_input=worker_input.dir_input;
@@ -26,6 +32,7 @@ tem=0;
 tic
 disp(vars{v})
 
+%Parse which dimensions to average
 local_var_spec.averaging=averaging_flags(local_var_spec.cell_methods);
 
 %Gather variable info, special operations, scale_factors; or just load the variable 
@@ -54,7 +61,7 @@ if strcmp(fieldnames(variables),'option')
    end
 end
 
-%Set TEM variable(s)
+%Set TEM tariable(s)
 if isempty(variables.var) & strcmp(variables.operation,'TEM') & tem==0
    disp('TEM variable requested, now calculating all TEM output variables')
    variables.var{1}='Uzm';
@@ -79,10 +86,19 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
    end
 
    %Output grid label
-   grid_label='gn';
-   if strcmp(output(end),'Z')
-      grid_label=[grid_label,'z'];
+   grid_fields={'grid';'grid_label'};
+   grid_label_index=[];
+   for k=1:length(grid_fields)
+      for j=1:length(globals)
+         if strcmp(grid_fields{k},globals(j).name)
+            grid_label_index=j;
+            if strcmp(output(end),'Z')   
+               globals(j).value=[globals(j).value,'z'];
+            end
+         end
+      end
    end
+   grid_label=globals(grid_label_index).value;
 
    %MIP-compatible model name
    for j=1:length(globals)
@@ -91,14 +107,24 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
       end
    end
 
+   for j=1:length(globals)
+      if strcmp('frequency',globals(j).name)
+         frequency_index=j;
+      end
+   end
+
    if strcmp(frequency,'month')
       date_ind=15;
+      globals(frequency_index).value='mon';
    else
       date_ind=19;
+      globals(frequency_index).value=[frequency,'Pt'];
    end
 
    %If there are some files done, then trim the file list
-   if ~strcmp(variables.operation,'TEM')   
+   if strcmp(variables.operation,'TEM') 
+      disp('Performing operations regardless of whether output files exist')
+   else 
       dir_output=[cmor_specification.cmor_output_dir,cmor_specification.case_name,'/postprocess/output/',output,'/',vars{v},'/',grid_label,'/',version,'/'];
       if ~exist(dir_output)
          mkdir(dir_output)
@@ -147,7 +173,10 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
          end            
 
          date_string=file_name(end-date_ind:end-3);
-         date=ncread(file_name,'date');
+         if isempty(str2num(date_string))
+            date_ind=15;
+            date_string=file_name(end-date_ind:end-3);
+         end
          time=ncread(file_name,'time');
          dims=parse_string(local_var_spec.dimensions);
 
@@ -175,7 +204,6 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
 
          %Load dimension info, connect output dims to input dims
          for j=1:length(dims)
-
            dim{vin}{j}.native.name=translate_cesm(cesm_dictionary,dims{j},'Dimension',1);   
 
             %Single-level/subdomain 
@@ -202,6 +230,11 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
                dim{vin}{j}.interp_direction='';
                dim{vin}{j}.interp=[];
 
+               %Calendar info for time dimension
+               if contains(dim{vin}{j}.out.name,'time')
+                  dim{vin}{j}.out.info.calendar='365_day';
+               end 
+
                %Assimilate MIP lev info for native output
                if strcmp(dim{vin}{j}.out.info,'lev')
                   dim{vin}{j}.out.info=dimension_info(specification,'standard_hybrid_sigma',cesm_dictionary);
@@ -227,9 +260,9 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
                   if isempty(dim{vin}{j}.interp)
                      save_ps=1;
                   end
-                  if contains(dim{vin}{j}.out.name,'lev')              
+                  %Staying in native coordiantes
+                  if contains(dim{vin}{j}.out.name,'lev') & isempty(dim{vin}{j}.interp) 
                      dim{vin}{j}.out.name='lev';
-                     dim{vin}{j}.interp='';
                   end
                end
 
@@ -263,7 +296,7 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
          end
 
          %Load lev formula fields
-         if load_lev==1  
+         if load_lev==1 
             a=ncread(file_name,'hyam')*1e5;
             b=ncread(file_name,'hybm');
             ai=ncread(file_name,'hyai')*1e5;
@@ -333,7 +366,10 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
          operation=variables.operation;
          switch operation
             case 'age_of_air'
-               var_out.native.value=age_of_air(var_out.native.value,var_out.dim{3}.native.value,var_out.dim{2}.native.value,variables.p0,variables.lat0);
+               %Use get_dim_index to generalize
+               lat=ncread(file_name,'lat');
+               lev=ncread(file_name,'lev');
+               var_out.native.value=age_of_air(var_out.native.value,lev,lat,variables.p0,variables.lat0);
             case 'sum'
                var_out=calculate_sum(var_out,variables.axis);
             case 'ozone_integral'
@@ -389,13 +425,13 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
       end
 
       %Do any interpolation
-      for j=1:length(var_out.dim) 
+      for j=1:length(var_out.dim)
          if ~isempty(var_out.dim{j}.interp)
-            %Assign dim index to be interpolated - mapping between native and output space
+           %Assign dim index to be interpolated - mapping between native and output space
             if strcmp(var_out.dim{j}.interp_direction,'vertical')
                dimsearch='lev';
             else
-               dimsearch=var_out.dim{j}.name;
+               dimsearch=var_out.dim{j}.out.name;
             end
             interp_dim=get_dim_index(var_out.native_dim,dimsearch,'contains');
             %Carry out interpolation
@@ -423,7 +459,6 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
       for j=1:length(local_var_spec.averaging)
          if ~strcmp(local_var_spec.averaging{j},'time') & strcmp(local_var_spec.averaging{j},'longitude') & length(remove_list)==0
             var_out.native.value=squeeze(mean(var_out.native.value,1,'omitnan'));
-            var_out.native.value(isnan(var_out.native.value))=str2num(output_file.Header.missing_value);
             ps_out.value=mean(ps_out.value,1);
          end
       end
@@ -464,7 +499,7 @@ if ~isempty(variables.var) & ~strcmp(variables.var{1},'no_match')
 
       %Set info for NetCDF
       var_out.info=output_var_details{v};
-
+      
       %Save to file      
       if strcmp(variables.operation,'TEM')
          tem_vars=struct2cell(var_out.tem);
