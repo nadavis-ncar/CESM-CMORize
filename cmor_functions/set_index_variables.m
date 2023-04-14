@@ -10,7 +10,7 @@ for i=1:length(index_vars)
    for j=1:length(globals)
       if strcmp(globals(j).name,index_vars{i})
          if ~strcmp(index_vars{i},'variant_label')
-            globals(j).value=case_array(i*2);
+            globals(j).value=int32(str2num(case_array(i*2)));
          else
             globals(j).value=case_name;
          end
